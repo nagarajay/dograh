@@ -6,7 +6,8 @@ deployment is configured against.
 
 What survives a reset:
 
-- the ``users`` row for ``--owner-email`` (default: nagarajay@gmail.com)
+- the ``users`` row for ``--owner-email``, which is required and has no
+  default: the identity to keep must be named deliberately on every run
 - the ``organizations`` row that user's ``selected_organization_id`` points at
 - the ``organization_users`` membership joining those two
 - ``alembic_version`` and ``workflow_templates`` (schema/migration state and
@@ -29,15 +30,16 @@ Non-``public`` schemas are never touched.
 
 Usage (dry run is the default -- it only reports what it would do):
 
-    python -m scripts.reset_app_data
+    python -m scripts.reset_app_data --owner-email owner@example.com
 
     # inside the running api container, which already has DATABASE_URL
-    docker compose exec api python -m scripts.reset_app_data
+    docker compose exec api python -m scripts.reset_app_data \
+        --owner-email owner@example.com
 
 To actually delete, both confirmations are required: the ``--yes`` flag and
 typing the target host back when prompted (or passing --confirm-host).
 
-    python -m scripts.reset_app_data --yes
+    python -m scripts.reset_app_data --owner-email owner@example.com --yes
 """
 
 import argparse
@@ -47,8 +49,6 @@ import sys
 from urllib.parse import urlparse
 
 import asyncpg
-
-DEFAULT_OWNER_EMAIL = "nagarajay@gmail.com"
 
 # Tables that are not per-tenant operational data. Rows here are left alone
 # except for the scoped identity deletes handled separately.
@@ -337,8 +337,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--owner-email",
-        default=DEFAULT_OWNER_EMAIL,
-        help=f"identity to preserve (default: {DEFAULT_OWNER_EMAIL})",
+        required=True,
+        help=(
+            "identity to preserve; required, so the account that survives is "
+            "always named deliberately rather than inherited from a default."
+        ),
     )
     parser.add_argument(
         "--yes",
