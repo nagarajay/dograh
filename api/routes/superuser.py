@@ -59,6 +59,8 @@ class SuperuserWorkflowRunResponse(BaseModel):
     initial_context: Optional[dict]
     gathered_context: Optional[dict]
     created_at: datetime
+    is_superadmin_test: bool = False
+    superadmin_initiated_by_user_id: Optional[int] = None
 
 
 class SuperuserWorkflowRunsListResponse(BaseModel):
@@ -335,6 +337,7 @@ class SuperuserTestRunResponse(BaseModel):
     mode: str
     definition_id: Optional[int]
     is_superadmin_test: bool
+    superadmin_initiated_by_user_id: Optional[int]
     created_at: datetime
 
 
@@ -632,6 +635,7 @@ async def create_superadmin_test_run(
         mode=run.mode,
         definition_id=run.definition_id,
         is_superadmin_test=True,
+        superadmin_initiated_by_user_id=user.id,
         created_at=run.created_at,
     )
 

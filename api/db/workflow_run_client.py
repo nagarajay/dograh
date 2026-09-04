@@ -6,7 +6,11 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import joinedload, selectinload
 
 from api.db.base_client import BaseDBClient
-from api.db.filters import apply_workflow_run_filters, get_workflow_run_order_clause
+from api.db.filters import (
+    apply_workflow_run_filters,
+    exclude_superadmin_test_runs,
+    get_workflow_run_order_clause,
+)
 from api.db.models import (
     OrganizationModel,
     UserModel,
@@ -16,6 +20,10 @@ from api.db.models import (
 )
 from api.enums import CallType, StorageBackend
 from api.schemas.workflow import WorkflowRunResponseSchema
+from api.services.superuser.test_runs import (
+    is_superadmin_test_run,
+    superadmin_test_run_initiator,
+)
 from api.services.workflow.run_usage_response import format_public_cost_info
 from api.utils.recording_artifacts import get_recording_storage_key
 
@@ -223,6 +231,10 @@ class WorkflowRunClient(BaseDBClient):
                         "initial_context": run.initial_context,
                         "gathered_context": run.gathered_context,
                         "created_at": run.created_at,
+                        "is_superadmin_test": is_superadmin_test_run(run.extra),
+                        "superadmin_initiated_by_user_id": superadmin_test_run_initiator(
+                            run.extra
+                        ),
                     }
                 )
 
@@ -334,6 +346,12 @@ class WorkflowRunClient(BaseDBClient):
 
             # Apply filters
             base_query = apply_workflow_run_filters(base_query, filters)
+
+            # A super admin verifying this agent drives a real run inside the
+            # customer's organization. The customer did not place that call, so
+            # it must not appear in their own run history — same predicate the
+            # usage and report queries already use.
+            base_query = exclude_superadmin_test_runs(base_query)
 
             # Count total with filters
             count_query = base_query.with_only_columns(func.count(WorkflowRunModel.id))

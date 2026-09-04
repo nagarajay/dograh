@@ -45,6 +45,8 @@ interface WorkflowRun {
     initial_context?: Record<string, unknown>;
     gathered_context?: Record<string, unknown>;
     created_at: string;
+    is_superadmin_test?: boolean;
+    superadmin_initiated_by_user_id?: number | null;
 }
 
 interface WorkflowRunsResponse {
@@ -404,7 +406,23 @@ export default function RunsPage() {
                                                     key={run.id}
                                                     className={selectedRowId === run.id ? "bg-primary/20 ring-1 ring-primary/50" : ""}>
                                                     <TableCell className="font-mono text-sm">
-                                                        #{run.id}
+                                                        <div className="flex flex-col gap-1">
+                                                            <span>#{run.id}</span>
+                                                            {run.is_superadmin_test && (
+                                                                <Tooltip>
+                                                                    <TooltipTrigger asChild>
+                                                                        <Badge variant="outline" className="w-fit border-amber-500 text-amber-700 font-sans">
+                                                                            Super-admin test
+                                                                        </Badge>
+                                                                    </TooltipTrigger>
+                                                                    <TooltipContent>
+                                                                        {run.superadmin_initiated_by_user_id
+                                                                            ? `Started by superuser #${run.superadmin_initiated_by_user_id}, not by the customer. Excluded from the customer's usage, reports and run history.`
+                                                                            : "Started from the super-admin console, not by the customer. Excluded from the customer's usage, reports and run history."}
+                                                                    </TooltipContent>
+                                                                </Tooltip>
+                                                            )}
+                                                        </div>
                                                     </TableCell>
                                                     <TableCell>
                                                         <div className="flex flex-col">
@@ -420,6 +438,18 @@ export default function RunsPage() {
                                                                     ? `${String(run.workflow_id).substring(0, 12)}...`
                                                                     : run.workflow_id}
                                                             </span>
+                                                            {run.user_id && (
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    Owner: user #{run.user_id}
+                                                                </span>
+                                                            )}
+                                                            {run.is_superadmin_test && (
+                                                                <span className="text-xs text-amber-700">
+                                                                    Started by: {run.superadmin_initiated_by_user_id
+                                                                        ? `superuser #${run.superadmin_initiated_by_user_id}`
+                                                                        : 'super-admin console'}
+                                                                </span>
+                                                            )}
                                                         </div>
                                                     </TableCell>
                                                     <TableCell className="text-center">

@@ -473,3 +473,146 @@ async def test_reprovisioning_never_renames_a_live_organization(db_session):
     assert again.id == organization.id
     assert again.display_name == "Original Name"
     assert again.external_reference == "avsiq-client-original"
+
+
+@pytest.mark.asyncio
+async def test_superadmin_run_list_preserves_marker_and_initiator(db_session):
+    """The operator must be able to tell a test run from the customer's own.
+
+    The marker lives in ``extra``, which the list response does not carry, so
+    the flag and the initiating superuser are surfaced as their own fields.
+    """
+    from api.services.superuser.test_runs import superadmin_test_run_extra
+
+    user, organization = await _make_org(db_session, "run-marker")
+    superuser, _ = await db_session.get_or_create_user_by_provider_id(
+        "su-user-run-marker-admin"
+    )
+    workflow = await db_session.create_workflow(
+        name="marker-agent",
+        workflow_definition={},
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+    customer_run = await db_session.create_workflow_run(
+        name="customer-run",
+        workflow_id=workflow.id,
+        mode=WorkflowRunMode.SMALLWEBRTC.value,
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+    test_run = await db_session.create_workflow_run(
+        name="superadmin-test",
+        workflow_id=workflow.id,
+        mode=WorkflowRunMode.SMALLWEBRTC.value,
+        user_id=user.id,
+        organization_id=organization.id,
+        extra=superadmin_test_run_extra(superuser.id),
+    )
+
+    runs, _ = await db_session.get_workflow_runs_for_superadmin(
+        limit=100, offset=0, organization_id=organization.id
+    )
+    by_id = {run["id"]: run for run in runs}
+
+    assert by_id[test_run.id]["is_superadmin_test"] is True
+    assert by_id[test_run.id]["superadmin_initiated_by_user_id"] == superuser.id
+    # The run's owner stays the customer: attribution and initiation differ.
+    assert by_id[test_run.id]["user_id"] == user.id
+    assert by_id[test_run.id]["organization_id"] == organization.id
+
+    assert by_id[customer_run.id]["is_superadmin_test"] is False
+    assert by_id[customer_run.id]["superadmin_initiated_by_user_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_customer_workflow_history_hides_superadmin_test_runs(db_session):
+    """The customer's own agent history must not show calls they never made."""
+    from api.services.superuser.test_runs import superadmin_test_run_extra
+
+    user, organization = await _make_org(db_session, "history-exclusion")
+    workflow = await db_session.create_workflow(
+        name="history-agent",
+        workflow_definition={},
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+    customer_run = await db_session.create_workflow_run(
+        name="customer-run",
+        workflow_id=workflow.id,
+        mode=WorkflowRunMode.SMALLWEBRTC.value,
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+    test_run = await db_session.create_workflow_run(
+        name="superadmin-test",
+        workflow_id=workflow.id,
+        mode=WorkflowRunMode.SMALLWEBRTC.value,
+        user_id=user.id,
+        organization_id=organization.id,
+        extra=superadmin_test_run_extra(user.id),
+    )
+
+    runs, total_count = await db_session.get_workflow_runs_by_workflow_id(
+        workflow.id, organization_id=organization.id, limit=100
+    )
+
+    listed_ids = {run.id for run in runs}
+    assert customer_run.id in listed_ids
+    assert test_run.id not in listed_ids
+    assert total_count == 1
+
+
+@pytest.mark.asyncio
+async def test_identity_update_rejects_a_reference_owned_by_another_org(db_session):
+    """An external reference identifies exactly one customer."""
+    from api.routes.organization import OrganizationIdentity, save_identity
+
+    _, first = await _make_org(db_session, "identity-conflict-first")
+    second_user, second = await _make_org(db_session, "identity-conflict-second")
+    await db_session.set_organization_identity(
+        first.id,
+        display_name="First Customer",
+        external_reference="avsiq-client-conflict",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await save_identity(
+            OrganizationIdentity(
+                display_name="Second Customer",
+                external_reference="avsiq-client-conflict",
+            ),
+            user=SimpleNamespace(
+                id=second_user.id, selected_organization_id=second.id
+            ),
+        )
+
+    assert excinfo.value.status_code == 409
+    unchanged = await db_session.get_organization_by_id(second.id)
+    assert unchanged.external_reference is None
+
+
+@pytest.mark.asyncio
+async def test_identity_update_keeps_the_reference_on_its_own_org(db_session):
+    """Re-sending an organization its own reference is not a conflict."""
+    from api.routes.organization import OrganizationIdentity, save_identity
+
+    user, organization = await _make_org(db_session, "identity-idempotent")
+    await db_session.set_organization_identity(
+        organization.id,
+        display_name="Original",
+        external_reference="avsiq-client-idempotent",
+    )
+
+    result = await save_identity(
+        OrganizationIdentity(
+            display_name="Renamed",
+            external_reference="avsiq-client-idempotent",
+        ),
+        user=SimpleNamespace(
+            id=user.id, selected_organization_id=organization.id
+        ),
+    )
+
+    assert result.display_name == "Renamed"
+    assert result.external_reference == "avsiq-client-idempotent"
