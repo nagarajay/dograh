@@ -35,6 +35,7 @@ class WorkflowRunClient(BaseDBClient):
         queued_run_id: int = None,
         organization_id: int | None = None,
         definition_id: int | None = None,
+        extra: dict | None = None,
     ) -> WorkflowRunModel:
         async with self.async_session() as session:
             workflow_query = (
@@ -82,6 +83,7 @@ class WorkflowRunClient(BaseDBClient):
                 queued_run_id=queued_run_id,
                 storage_backend=current_backend.value,
                 call_type=call_type.value,
+                extra=extra or {},
             )
             session.add(new_run)
             try:
@@ -97,6 +99,34 @@ class WorkflowRunClient(BaseDBClient):
             result = await session.execute(select(WorkflowRunModel))
             return result.scalars().all()
 
+    async def get_workflow_run_with_workflow(
+        self, run_id: int
+    ) -> WorkflowRunModel | None:
+        """Fetch a run and its workflow with no tenant scoping.
+
+        Only for callers that establish authorization from the run itself
+        rather than from a caller-supplied organization — the super-admin test
+        run check does exactly that. Ordinary lookups must keep using the
+        scoped :meth:`get_workflow_run`.
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(WorkflowRunModel)
+                .options(joinedload(WorkflowRunModel.workflow))
+                .where(WorkflowRunModel.id == run_id)
+            )
+            return result.scalars().first()
+
+    async def get_last_run_at_for_workflow(self, workflow_id: int):
+        """Timestamp of a workflow's most recent run, or None if it never ran."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(func.max(WorkflowRunModel.created_at)).where(
+                    WorkflowRunModel.workflow_id == workflow_id
+                )
+            )
+            return result.scalar()
+
     async def get_workflow_runs_for_superadmin(
         self,
         limit: int = 50,
@@ -104,6 +134,7 @@ class WorkflowRunClient(BaseDBClient):
         filters: Optional[List[Dict[str, Any]]] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "desc",
+        organization_id: Optional[int] = None,
     ) -> tuple[list[dict], int]:
         """
         Get paginated workflow runs for superadmin with organization information.
@@ -115,15 +146,27 @@ class WorkflowRunClient(BaseDBClient):
         """
         async with self.async_session() as session:
             # Build base query with joins
+            # A run belongs to the organization that owns its workflow. Deriving
+            # it from the workflow owner's *currently selected* organization
+            # instead mis-attributes every historical run of a user who has
+            # since switched organizations, and every run of a user who belongs
+            # to more than one. WorkflowModel.organization_id is what the
+            # organization-scoped queries elsewhere in this client filter on, so
+            # this keeps the super-admin view consistent with them.
             base_query = (
                 select(WorkflowRunModel)
                 .join(WorkflowModel, WorkflowRunModel.workflow_id == WorkflowModel.id)
-                .join(UserModel, WorkflowModel.user_id == UserModel.id)
+                .outerjoin(UserModel, WorkflowModel.user_id == UserModel.id)
                 .outerjoin(
                     OrganizationModel,
-                    UserModel.selected_organization_id == OrganizationModel.id,
+                    WorkflowModel.organization_id == OrganizationModel.id,
                 )
             )
+
+            if organization_id is not None:
+                base_query = base_query.where(
+                    WorkflowModel.organization_id == organization_id
+                )
 
             # Apply filters
             base_query = apply_workflow_run_filters(base_query, filters)
@@ -140,9 +183,9 @@ class WorkflowRunClient(BaseDBClient):
                     joinedload(WorkflowRunModel.workflow).joinedload(
                         WorkflowModel.user
                     ),
-                    joinedload(WorkflowRunModel.workflow)
-                    .joinedload(WorkflowModel.user)
-                    .joinedload(UserModel.selected_organization),
+                    joinedload(WorkflowRunModel.workflow).joinedload(
+                        WorkflowModel.organization
+                    ),
                 )
                 .order_by(order_clause)
                 .limit(limit)
@@ -153,11 +196,7 @@ class WorkflowRunClient(BaseDBClient):
             # Format the response
             formatted_runs = []
             for run in workflow_runs:
-                organization = (
-                    run.workflow.user.selected_organization
-                    if run.workflow.user
-                    else None
-                )
+                organization = run.workflow.organization if run.workflow else None
                 formatted_runs.append(
                     {
                         "id": run.id,

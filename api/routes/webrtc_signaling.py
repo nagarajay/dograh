@@ -57,6 +57,7 @@ from api.services.pipecat.ws_sender_registry import (
     unregister_ws_sender,
 )
 from api.services.quota_service import authorize_workflow_run_start
+from api.services.superuser.test_runs import superadmin_test_run_initiator
 from api.services.workflow.embed_session_service import validate_embed_origin
 
 router = APIRouter(prefix="/ws")
@@ -833,6 +834,25 @@ class SignalingManager:
 signaling_manager = SignalingManager()
 
 
+async def _authorize_superadmin_test_run(user: UserModel, workflow_run_id: int):
+    """Return the run only if it is this superuser's own super-admin test run.
+
+    Returning None means "treat as not found", so a non-superuser learns
+    nothing about runs outside their organization.
+    """
+    if not getattr(user, "is_superuser", False):
+        return None
+
+    run = await db_client.get_workflow_run_with_workflow(workflow_run_id)
+    if run is None:
+        return None
+    if superadmin_test_run_initiator(run.extra) != user.id:
+        return None
+    if run.workflow is None or run.workflow.organization_id is None:
+        return None
+    return run
+
+
 @router.websocket("/signaling/{workflow_id}/{workflow_run_id}")
 async def signaling_websocket(
     websocket: WebSocket,
@@ -847,12 +867,28 @@ async def signaling_websocket(
     workflow_run = await db_client.get_workflow_run(
         workflow_run_id, organization_id=user.selected_organization_id
     )
+    organization_id = user.selected_organization_id
+
     if not workflow_run:
-        logger.warning(
-            f"workflow run {workflow_run_id} not found for org "
-            f"{user.selected_organization_id}"
+        # One deliberate exception to organization scoping: the run this
+        # superuser created themselves from the super-admin console, to verify
+        # another organization's agent. Every clause is required — a superuser
+        # flag alone grants nothing, and a test run started by one superuser
+        # cannot be driven by another. The run still executes in its own
+        # organization, so quota, concurrency and configuration stay the
+        # customer's.
+        workflow_run = await _authorize_superadmin_test_run(user, workflow_run_id)
+        if workflow_run is None:
+            logger.warning(
+                f"workflow run {workflow_run_id} not found for org "
+                f"{user.selected_organization_id}"
+            )
+            raise HTTPException(status_code=400, detail="Bad workflow_run_id")
+        organization_id = workflow_run.workflow.organization_id
+        logger.info(
+            f"superadmin test run {workflow_run_id} driven by user {user.id} "
+            f"in organization {organization_id}"
         )
-        raise HTTPException(status_code=400, detail="Bad workflow_run_id")
     if workflow_run.workflow_id != workflow_id:
         logger.warning(
             f"workflow run {workflow_run_id} belongs to workflow "
@@ -865,7 +901,7 @@ async def signaling_websocket(
         workflow_id,
         workflow_run_id,
         user,
-        user.selected_organization_id,
+        organization_id,
         enforce_call_concurrency=True,
         call_concurrency_source="webrtc",
     )

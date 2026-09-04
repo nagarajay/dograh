@@ -17,6 +17,7 @@ import {
   Megaphone,
   Phone,
   Settings,
+  ShieldCheck,
   TrendingUp,
   UserRound,
   Workflow,
@@ -56,6 +57,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAppConfig } from "@/context/AppConfigContext";
 import { useLeadForms } from "@/context/LeadFormsContext";
 import { useTelephonyConfigWarnings } from "@/context/TelephonyConfigWarningsContext";
+import { useIsSuperuser } from "@/hooks/useIsSuperuser";
 import { useLatestReleaseVersion } from "@/hooks/useLatestReleaseVersion";
 import type { LocalUser } from "@/lib/auth";
 import { useAuth } from "@/lib/auth";
@@ -153,6 +155,19 @@ const NAV_SECTIONS: SidebarNavSection[] = [
   },
 ];
 
+// Rendered only for superusers. Hiding it is presentation, not access control:
+// every /superuser endpoint enforces the flag on its own.
+const SUPERADMIN_SECTION: SidebarNavSection = {
+  label: "SUPER ADMIN",
+  items: [
+    {
+      title: "Organizations",
+      url: "/superadmin/organizations",
+      icon: ShieldCheck,
+    },
+  ],
+};
+
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -168,6 +183,10 @@ export function AppSidebar() {
     telnyxMissingWebhookPublicKeyCount > 0 ||
     vonageMissingSignatureSecretCount > 0;
   const isCollapsed = !isMobile && state === "collapsed";
+  const { isSuperuser } = useIsSuperuser();
+  const navSections = isSuperuser
+    ? [...NAV_SECTIONS, SUPERADMIN_SECTION]
+    : NAV_SECTIONS;
 
   // Version info from app config context
   const versionInfo = config ? { ui: config.uiVersion, api: config.apiVersion } : null;
@@ -386,7 +405,7 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent className={cn("notranslate", isCollapsed && "px-0")} translate="no">
-        {NAV_SECTIONS.map((section, index) => (
+        {navSections.map((section, index) => (
           <SidebarGroup
             key={section.label ?? "overview"}
             className={index === 0 ? "mt-2" : "mt-6"}

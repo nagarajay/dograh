@@ -5,6 +5,12 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str
     name: str | None = None
+    # Customer identity supplied by the system provisioning this account. Both
+    # are optional so existing clients are unaffected; when sent, they are what
+    # lets an operator recognise the organization without mapping numeric ids
+    # by hand. Only applied to a newly created organization.
+    organization_display_name: str | None = None
+    organization_external_reference: str | None = None
 
     @field_validator("password")
     @classmethod

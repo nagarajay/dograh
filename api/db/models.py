@@ -109,6 +109,13 @@ class OrganizationModel(Base):
     provider_id = Column(String, unique=True, index=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
+    # Human-readable name of the customer this organization belongs to, and the
+    # id that customer has in the system that provisioned it. Both are set by
+    # the provisioning caller; Dograh never derives them, so an organization
+    # created without them keeps working and simply shows as unnamed.
+    display_name = Column(String(128), nullable=True)
+    external_reference = Column(String(128), nullable=True)
+
     # Deprecated: MPS owns quota and credit ledger state.
     quota_type = Column(
         Enum("monthly", "annual", name="quota_type"),
@@ -165,6 +172,15 @@ class OrganizationModel(Base):
         "OrganizationConfigurationModel", back_populates="organization"
     )
     api_keys = relationship("APIKeyModel", back_populates="organization")
+
+    __table_args__ = (
+        Index(
+            "uq_organizations_external_reference",
+            "external_reference",
+            unique=True,
+            postgresql_where=text("external_reference IS NOT NULL"),
+        ),
+    )
 
 
 class APIKeyModel(Base):

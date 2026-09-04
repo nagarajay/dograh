@@ -3,11 +3,12 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Float, Text, and_, cast, func
+from sqlalchemy import Float, Text, and_, cast, func, or_
 from sqlalchemy.dialects.postgresql import JSONB
 
 from api.db.models import WorkflowRunModel
 from api.enums import WORKFLOW_RUN_MODES_BY_CHANNEL, CallType
+from api.services.superuser.test_runs import SUPERADMIN_TEST_FLAG
 
 
 def get_workflow_run_order_clause(
@@ -255,3 +256,18 @@ def apply_workflow_run_filters(
         base_query = base_query.where(and_(*filter_conditions))
 
     return base_query
+
+
+def not_superadmin_test_run_clause():
+    """Match every run that is not a super-admin verification call.
+
+    Written as "not true" rather than "is false" so runs that predate the
+    marker — where the key is simply absent — keep counting.
+    """
+    flag = WorkflowRunModel.extra[SUPERADMIN_TEST_FLAG].as_boolean()
+    return or_(flag.is_(None), flag.is_(False))
+
+
+def exclude_superadmin_test_runs(query):
+    """Drop super-admin test runs from a customer-facing query."""
+    return query.where(not_superadmin_test_run_clause())

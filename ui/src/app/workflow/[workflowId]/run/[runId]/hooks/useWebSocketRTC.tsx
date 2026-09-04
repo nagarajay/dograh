@@ -19,6 +19,12 @@ interface UseWebSocketRTCProps {
     accessToken: string | null;
     initialContextVariables?: Record<string, string> | null;
     onNodeTransition?: (transition: ConversationNodeTransitionItem) => void;
+    // Both preflight checks are scoped to the caller's own organization, so a
+    // super admin testing another organization's agent would validate the
+    // wrong tenant's configuration and be refused its workflow outright.
+    // Skipping them loses only the early, friendlier error: the server still
+    // authorizes quota and configuration when the offer arrives.
+    skipPreflightValidation?: boolean;
 }
 
 type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed';
@@ -44,7 +50,7 @@ const HANDLED_SERVICE_ERROR_TYPES = new Set([
 // start a fresh run rather than being offered a retry that cannot succeed.
 const SPENT_RUN_ERROR_TYPES = new Set(['workflow_run_already_completed']);
 
-export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initialContextVariables, onNodeTransition }: UseWebSocketRTCProps) => {
+export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initialContextVariables, onNodeTransition, skipPreflightValidation = false }: UseWebSocketRTCProps) => {
     const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
     const [connectionActive, setConnectionActive] = useState(false);
     const [isCompleted, setIsCompleted] = useState(false);
@@ -711,6 +717,7 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
             }
 
             // Validate API keys
+            if (!skipPreflightValidation) {
             const response = await validateUserConfigurationsApiV1UserConfigurationsUserValidateGet({
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
@@ -769,6 +776,7 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
                 setWorkflowConfigError(msg);
                 setConnectionStatus('failed');
                 return;
+            }
             }
 
             // Connect WebSocket first

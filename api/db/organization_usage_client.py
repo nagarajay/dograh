@@ -10,7 +10,9 @@ from sqlalchemy.orm import joinedload
 from api.db.base_client import BaseDBClient
 from api.db.filters import (
     apply_workflow_run_filters,
+    exclude_superadmin_test_runs,
     get_workflow_run_order_clause,
+    not_superadmin_test_run_clause,
 )
 from api.db.models import (
     OrganizationConfigurationModel,
@@ -168,6 +170,10 @@ class OrganizationUsageClient(BaseDBClient):
                     WorkflowRunModel.usage_info.isnot(None),
                 )
             )
+            # A super admin verifying an agent runs inside the customer's
+            # organization, but the customer did not place that call and must
+            # not be shown it as their own usage.
+            query = exclude_superadmin_test_runs(query)
 
             # Apply date filters if provided
             if start_date:
@@ -301,6 +307,7 @@ class OrganizationUsageClient(BaseDBClient):
                 )
                 .order_by(WorkflowRunModel.created_at.desc())
             )
+            query = exclude_superadmin_test_runs(query)
 
             if start_date:
                 query = query.where(WorkflowRunModel.created_at >= start_date)
@@ -378,6 +385,7 @@ class OrganizationUsageClient(BaseDBClient):
                     WorkflowRunModel.created_at >= start_date,
                     WorkflowRunModel.created_at <= end_date,
                     WorkflowRunModel.is_completed == True,
+                    not_superadmin_test_run_clause(),
                 )
                 .group_by(date_expr)
                 .order_by(date_expr.desc())

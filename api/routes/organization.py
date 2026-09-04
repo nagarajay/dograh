@@ -616,6 +616,68 @@ async def save_preferences(
     )
 
 
+class OrganizationIdentity(BaseModel):
+    """Who this organization belongs to, in the provisioning system's terms."""
+
+    display_name: str | None = None
+    external_reference: str | None = None
+
+
+@router.get("/identity", response_model=OrganizationIdentity)
+async def get_identity(
+    user: UserModel = Depends(get_user_with_selected_organization),
+) -> OrganizationIdentity:
+    organization = await db_client.get_organization_by_id(user.selected_organization_id)
+    if organization is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return OrganizationIdentity(
+        display_name=organization.display_name,
+        external_reference=organization.external_reference,
+    )
+
+
+@router.put("/identity", response_model=OrganizationIdentity)
+async def save_identity(
+    request: OrganizationIdentity,
+    user: UserModel = Depends(get_user_with_selected_organization),
+) -> OrganizationIdentity:
+    """Label the caller's own organization.
+
+    Scoped to the caller's organization like every other route here, so this
+    adds no cross-tenant write path: it exists so an organization provisioned
+    before identity was recorded can be labelled by the system that owns it,
+    rather than by a super admin editing another tenant's data.
+    """
+    organization_id = user.selected_organization_id
+
+    external_reference = (
+        request.external_reference.strip() if request.external_reference else None
+    ) or None
+    if external_reference:
+        existing = await db_client.get_organization_by_external_reference(
+            external_reference
+        )
+        if existing is not None and existing.id != organization_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Organization external reference already registered",
+            )
+
+    display_name = (
+        request.display_name.strip() if request.display_name else None
+    ) or None
+
+    organization = await db_client.set_organization_identity(
+        organization_id,
+        display_name=display_name,
+        external_reference=external_reference,
+    )
+    return OrganizationIdentity(
+        display_name=organization.display_name,
+        external_reference=organization.external_reference,
+    )
+
+
 @router.get(
     "/model-configurations/preferences",
     response_model=OrganizationPreferences,

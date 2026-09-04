@@ -26,6 +26,27 @@ class TelephonyPhoneNumberConflictError(Exception):
 
 
 class TelephonyPhoneNumberClient(BaseDBClient):
+    async def list_inbound_addresses_for_workflow(
+        self, organization_id: int, workflow_id: int
+    ) -> List[str]:
+        """Addresses that route inbound calls to a workflow, within one org.
+
+        Organization-scoped even though the workflow id alone would be unique:
+        a caller that already resolved the workflow under one tenant must not
+        be able to read another tenant's numbers by passing a foreign id.
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(TelephonyPhoneNumberModel.address)
+                .where(
+                    TelephonyPhoneNumberModel.organization_id == organization_id,
+                    TelephonyPhoneNumberModel.inbound_workflow_id == workflow_id,
+                    TelephonyPhoneNumberModel.is_active.is_(True),
+                )
+                .order_by(TelephonyPhoneNumberModel.address)
+            )
+            return list(result.scalars().all())
+
     async def list_phone_numbers_for_config(
         self, telephony_configuration_id: int
     ) -> List[TelephonyPhoneNumberModel]:

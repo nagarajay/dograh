@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import String, and_, func, select
 
 from api.db.base_client import BaseDBClient
+from api.db.filters import not_superadmin_test_run_clause
 from api.db.models import WorkflowModel, WorkflowRunModel
 
 
@@ -110,6 +111,9 @@ class ReportsClient(BaseDBClient):
                         WorkflowModel.organization_id == organization_id,
                         WorkflowRunModel.created_at >= start_utc,
                         WorkflowRunModel.created_at <= end_utc,
+                        # Super-admin verification calls are not the customer's
+                        # traffic and must not appear in their reports.
+                        not_superadmin_test_run_clause(),
                     )
                 )
             )

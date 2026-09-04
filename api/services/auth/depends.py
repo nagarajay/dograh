@@ -328,8 +328,21 @@ async def get_superuser(
     """
     Dependency to check if the authenticated user is a superuser.
     Raises HTTPException if user is not authenticated or not a superuser.
+
+    API-key authentication is rejected outright, even for a key whose creator
+    is a superuser. ``_handle_api_key_auth`` returns the key owner's full
+    ``UserModel``, ``is_superuser`` included, so accepting keys here would turn
+    every organization-scoped key a superuser ever created into a
+    cross-tenant admin credential. Superuser endpoints require an interactive
+    session token.
     """
-    user = await get_user(authorization, x_api_key)
+    if x_api_key:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. API key authentication is not permitted for superuser endpoints.",
+        )
+
+    user = await get_user(authorization, None)
 
     if not user.is_superuser:
         raise HTTPException(

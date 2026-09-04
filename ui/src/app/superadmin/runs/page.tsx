@@ -94,6 +94,16 @@ export default function RunsPage() {
 
     const [selectedRowId, setSelectedRowId] = useState<number | null>(null);
 
+    // Set when arriving from an organization page, so the run list shows that
+    // organization's runs only. Attribution is by owning organization, so this
+    // matches what the organization overview counted.
+    const organizationIdFilter = useMemo(() => {
+        const raw = searchParams.get('organization_id');
+        if (!raw) return undefined;
+        const parsed = parseInt(raw, 10);
+        return Number.isNaN(parsed) ? undefined : parsed;
+    }, [searchParams]);
+
     const auth = useAuth();
     const { endTaskReasonCodes } = useDispositionCodes();
     const availableSuperadminFilterAttributes = useMemo(
@@ -139,6 +149,9 @@ export default function RunsPage() {
                     ...(filterParam && { filters: filterParam }),
                     ...(sortByParam && { sort_by: sortByParam }),
                     ...(sortOrderParam && { sort_order: sortOrderParam }),
+                    ...(organizationIdFilter !== undefined && {
+                        organization_id: organizationIdFilter,
+                    }),
                 },
             });
 
@@ -159,7 +172,7 @@ export default function RunsPage() {
                 setIsAutoRefreshing(false);
             }
         }
-    }, [limit, auth.isAuthenticated]);
+    }, [limit, auth.isAuthenticated, organizationIdFilter]);
 
     const updatePageInUrl = useCallback((page: number, filters?: ActiveFilter[], sortByParam?: string | null, sortOrderParam?: 'asc' | 'desc') => {
         const params = new URLSearchParams();

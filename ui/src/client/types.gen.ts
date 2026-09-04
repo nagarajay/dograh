@@ -4345,6 +4345,22 @@ export type OrganizationContextResponse = {
 };
 
 /**
+ * OrganizationIdentity
+ *
+ * Who this organization belongs to, in the provisioning system's terms.
+ */
+export type OrganizationIdentity = {
+    /**
+     * Display Name
+     */
+    display_name?: string | null;
+    /**
+     * External Reference
+     */
+    external_reference?: string | null;
+};
+
+/**
  * OrganizationModelServicesContext
  */
 export type OrganizationModelServicesContext = {
@@ -5546,6 +5562,14 @@ export type SignupRequest = {
      * Name
      */
     name?: string | null;
+    /**
+     * Organization Display Name
+     */
+    organization_display_name?: string | null;
+    /**
+     * Organization External Reference
+     */
+    organization_external_reference?: string | null;
 };
 
 /**
@@ -5751,6 +5775,498 @@ export type SpeechmaticsSttConfiguration = {
 };
 
 /**
+ * SuperuserAgentInspectionResponse
+ *
+ * What the agent will actually do, with every secret masked or omitted.
+ */
+export type SuperuserAgentInspectionResponse = {
+    workflow: SuperuserWorkflowSummary;
+    /**
+     * Organization Id
+     */
+    organization_id: number;
+    /**
+     * Inspected Source
+     */
+    inspected_source: string;
+    /**
+     * Inspected Definition Id
+     */
+    inspected_definition_id: number | null;
+    /**
+     * Inspected Version Number
+     */
+    inspected_version_number: number | null;
+    /**
+     * Published Definition Id
+     */
+    published_definition_id: number | null;
+    /**
+     * Published Version Number
+     */
+    published_version_number: number | null;
+    /**
+     * Published At
+     */
+    published_at: string | null;
+    /**
+     * Has Unpublished Draft
+     */
+    has_unpublished_draft: boolean;
+    /**
+     * Global Prompt
+     */
+    global_prompt: string | null;
+    /**
+     * Nodes
+     */
+    nodes: Array<SuperuserInspectedNode>;
+    /**
+     * Edges
+     */
+    edges: Array<SuperuserInspectedEdge>;
+    /**
+     * Tools
+     */
+    tools: Array<SuperuserInspectedTool>;
+    /**
+     * Documents
+     */
+    documents: Array<SuperuserInspectedDocument>;
+    /**
+     * Model Configuration
+     */
+    model_configuration: {
+        [key: string]: unknown;
+    };
+    /**
+     * Workflow Configurations
+     */
+    workflow_configurations: {
+        [key: string]: unknown;
+    };
+    /**
+     * Template Context Variables
+     */
+    template_context_variables: {
+        [key: string]: unknown;
+    };
+    /**
+     * Attached Phone Numbers
+     */
+    attached_phone_numbers: Array<string>;
+};
+
+/**
+ * SuperuserInspectedDocument
+ */
+export type SuperuserInspectedDocument = {
+    /**
+     * Document Uuid
+     */
+    document_uuid: string;
+    /**
+     * Filename
+     */
+    filename: string | null;
+    /**
+     * Retrieval Mode
+     */
+    retrieval_mode: string | null;
+    /**
+     * Processing Status
+     */
+    processing_status: string | null;
+    /**
+     * Total Chunks
+     */
+    total_chunks: number | null;
+    /**
+     * Resolved
+     */
+    resolved: boolean;
+};
+
+/**
+ * SuperuserInspectedEdge
+ */
+export type SuperuserInspectedEdge = {
+    /**
+     * Source
+     */
+    source: string | null;
+    /**
+     * Target
+     */
+    target: string | null;
+    /**
+     * Label
+     */
+    label: string | null;
+    /**
+     * Condition
+     */
+    condition: string | null;
+};
+
+/**
+ * SuperuserInspectedNode
+ */
+export type SuperuserInspectedNode = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Type
+     */
+    type: string | null;
+    /**
+     * Name
+     */
+    name: string | null;
+    /**
+     * Narrative
+     */
+    narrative: {
+        [key: string]: unknown;
+    };
+    /**
+     * Tool Uuids
+     */
+    tool_uuids: Array<string>;
+    /**
+     * Document Uuids
+     */
+    document_uuids: Array<string>;
+    /**
+     * Mcp Tool Filters
+     */
+    mcp_tool_filters: {
+        [key: string]: unknown;
+    } | null;
+};
+
+/**
+ * SuperuserInspectedTool
+ */
+export type SuperuserInspectedTool = {
+    /**
+     * Tool Uuid
+     */
+    tool_uuid: string;
+    /**
+     * Name
+     */
+    name: string | null;
+    /**
+     * Description
+     */
+    description: string | null;
+    /**
+     * Category
+     */
+    category: string | null;
+    /**
+     * Status
+     */
+    status: string | null;
+    /**
+     * Resolved
+     */
+    resolved: boolean;
+};
+
+/**
+ * SuperuserOrganizationDetailResponse
+ */
+export type SuperuserOrganizationDetailResponse = {
+    organization: SuperuserOrganizationSummary;
+    /**
+     * Users
+     */
+    users: Array<SuperuserOrganizationUser>;
+    operational_state: SuperuserOrganizationOperationalState;
+};
+
+/**
+ * SuperuserOrganizationOperationalState
+ *
+ * Derived provisioning state. Never carries a stored configuration value.
+ */
+export type SuperuserOrganizationOperationalState = {
+    /**
+     * Bootstrap State
+     */
+    bootstrap_state: string;
+    /**
+     * Bootstrap Updated At
+     */
+    bootstrap_updated_at: string | null;
+    /**
+     * Model Configuration Present
+     */
+    model_configuration_present: boolean;
+    /**
+     * Model Configuration Updated At
+     */
+    model_configuration_updated_at: string | null;
+    /**
+     * Model Configuration Last Validated At
+     */
+    model_configuration_last_validated_at: string | null;
+    /**
+     * Langfuse Configured
+     */
+    langfuse_configured: boolean;
+    /**
+     * Active Api Key Count
+     */
+    active_api_key_count: number;
+    /**
+     * Telephony Configurations
+     */
+    telephony_configurations: Array<SuperuserTelephonyConfigurationState>;
+};
+
+/**
+ * SuperuserOrganizationSummary
+ *
+ * One organization as it appears in the super-admin organization list.
+ *
+ * Identity is the Dograh organization id plus the auth provider's id. No
+ * display name is resolved: names live in the auth provider, not in Dograh,
+ * and fetching them would mean an outbound call per row.
+ */
+export type SuperuserOrganizationSummary = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Provider Id
+     */
+    provider_id: string;
+    /**
+     * Display Name
+     */
+    display_name: string | null;
+    /**
+     * External Reference
+     */
+    external_reference: string | null;
+    /**
+     * Created At
+     */
+    created_at: string | null;
+    /**
+     * Workflow Count
+     */
+    workflow_count: number;
+    /**
+     * Run Count
+     */
+    run_count: number;
+    /**
+     * User Count
+     */
+    user_count: number;
+    /**
+     * Last Run At
+     */
+    last_run_at: string | null;
+};
+
+/**
+ * SuperuserOrganizationUser
+ */
+export type SuperuserOrganizationUser = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Email
+     */
+    email: string | null;
+    /**
+     * Provider Id
+     */
+    provider_id: string | null;
+    /**
+     * Is Superuser
+     */
+    is_superuser: boolean;
+};
+
+/**
+ * SuperuserOrganizationsListResponse
+ */
+export type SuperuserOrganizationsListResponse = {
+    /**
+     * Organizations
+     */
+    organizations: Array<SuperuserOrganizationSummary>;
+    /**
+     * Total Count
+     */
+    total_count: number;
+    /**
+     * Page
+     */
+    page: number;
+    /**
+     * Limit
+     */
+    limit: number;
+    /**
+     * Total Pages
+     */
+    total_pages: number;
+};
+
+/**
+ * SuperuserTelephonyConfigurationState
+ */
+export type SuperuserTelephonyConfigurationState = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Provider
+     */
+    provider: string;
+    /**
+     * Is Default Outbound
+     */
+    is_default_outbound: boolean;
+    /**
+     * Inactive
+     */
+    inactive: boolean;
+    /**
+     * Inactive Since
+     */
+    inactive_since: string | null;
+    /**
+     * Inactive Reason
+     */
+    inactive_reason: string | null;
+    /**
+     * Phone Number Count
+     */
+    phone_number_count: number;
+    /**
+     * Created At
+     */
+    created_at: string | null;
+};
+
+/**
+ * SuperuserTestRunRequest
+ */
+export type SuperuserTestRunRequest = {
+    /**
+     * Name
+     */
+    name?: string | null;
+};
+
+/**
+ * SuperuserTestRunResponse
+ *
+ * A browser test run a super admin may connect to.
+ *
+ * ``organization_id`` is the customer's, not the super admin's: the run
+ * genuinely executes inside the customer's organization, which is what makes
+ * it evidence that the agent works there.
+ */
+export type SuperuserTestRunResponse = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Workflow Id
+     */
+    workflow_id: number;
+    /**
+     * Organization Id
+     */
+    organization_id: number;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Mode
+     */
+    mode: string;
+    /**
+     * Definition Id
+     */
+    definition_id: number | null;
+    /**
+     * Is Superadmin Test
+     */
+    is_superadmin_test: boolean;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
+ * SuperuserWorkflowDetailResponse
+ *
+ * Agent-level operational state. Carries no workflow definition body.
+ *
+ * The definition can embed provider configuration and prompt-level secrets,
+ * so the detail view reports only whether a published version exists and how
+ * the agent is reachable.
+ */
+export type SuperuserWorkflowDetailResponse = {
+    workflow: SuperuserWorkflowSummary;
+    /**
+     * Organization Id
+     */
+    organization_id: number;
+    /**
+     * Organization Provider Id
+     */
+    organization_provider_id: string;
+    /**
+     * Organization Display Name
+     */
+    organization_display_name: string | null;
+    /**
+     * Owner User Id
+     */
+    owner_user_id: number | null;
+    /**
+     * Released Definition Id
+     */
+    released_definition_id: number | null;
+    /**
+     * Current Definition Id
+     */
+    current_definition_id: number | null;
+    /**
+     * Last Run At
+     */
+    last_run_at: string | null;
+    /**
+     * Attached Phone Numbers
+     */
+    attached_phone_numbers: Array<string>;
+};
+
+/**
  * SuperuserWorkflowRunResponse
  */
 export type SuperuserWorkflowRunResponse = {
@@ -5852,6 +6368,58 @@ export type SuperuserWorkflowRunsListResponse = {
      * Total Pages
      */
     total_pages: number;
+};
+
+/**
+ * SuperuserWorkflowSummary
+ */
+export type SuperuserWorkflowSummary = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Workflow Uuid
+     */
+    workflow_uuid: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Folder Id
+     */
+    folder_id: number | null;
+    /**
+     * Is Published
+     */
+    is_published: boolean;
+    /**
+     * Total Runs
+     */
+    total_runs: number;
+    /**
+     * Created At
+     */
+    created_at: string | null;
+};
+
+/**
+ * SuperuserWorkflowsListResponse
+ */
+export type SuperuserWorkflowsListResponse = {
+    /**
+     * Organization Id
+     */
+    organization_id: number;
+    /**
+     * Workflows
+     */
+    workflows: Array<SuperuserWorkflowSummary>;
 };
 
 /**
@@ -8599,6 +9167,296 @@ export type ImpersonateApiV1SuperuserImpersonatePostResponses = {
 
 export type ImpersonateApiV1SuperuserImpersonatePostResponse = ImpersonateApiV1SuperuserImpersonatePostResponses[keyof ImpersonateApiV1SuperuserImpersonatePostResponses];
 
+export type ListOrganizationsApiV1SuperuserOrganizationsGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Page
+         *
+         * Page number (starts from 1)
+         */
+        page?: number;
+        /**
+         * Limit
+         *
+         * Number of items per page
+         */
+        limit?: number;
+        /**
+         * Search
+         *
+         * Case-insensitive match against the provider organization id
+         */
+        search?: string | null;
+    };
+    url: '/api/v1/superuser/organizations';
+};
+
+export type ListOrganizationsApiV1SuperuserOrganizationsGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListOrganizationsApiV1SuperuserOrganizationsGetError = ListOrganizationsApiV1SuperuserOrganizationsGetErrors[keyof ListOrganizationsApiV1SuperuserOrganizationsGetErrors];
+
+export type ListOrganizationsApiV1SuperuserOrganizationsGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: SuperuserOrganizationsListResponse;
+};
+
+export type ListOrganizationsApiV1SuperuserOrganizationsGetResponse = ListOrganizationsApiV1SuperuserOrganizationsGetResponses[keyof ListOrganizationsApiV1SuperuserOrganizationsGetResponses];
+
+export type GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Organization Id
+         */
+        organization_id: number;
+    };
+    query?: never;
+    url: '/api/v1/superuser/organizations/{organization_id}';
+};
+
+export type GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetError = GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetErrors[keyof GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetErrors];
+
+export type GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: SuperuserOrganizationDetailResponse;
+};
+
+export type GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetResponse = GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetResponses[keyof GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetResponses];
+
+export type ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Organization Id
+         */
+        organization_id: number;
+    };
+    query?: never;
+    url: '/api/v1/superuser/organizations/{organization_id}/workflows';
+};
+
+export type ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetError = ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetErrors[keyof ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetErrors];
+
+export type ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: SuperuserWorkflowsListResponse;
+};
+
+export type ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetResponse = ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetResponses[keyof ListOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGetResponses];
+
+export type GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Organization Id
+         */
+        organization_id: number;
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+    };
+    query?: never;
+    url: '/api/v1/superuser/organizations/{organization_id}/workflows/{workflow_id}';
+};
+
+export type GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetError = GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetErrors[keyof GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetErrors];
+
+export type GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: SuperuserWorkflowDetailResponse;
+};
+
+export type GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetResponse = GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetResponses[keyof GetOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdGetResponses];
+
+export type InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Organization Id
+         */
+        organization_id: number;
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+    };
+    query?: never;
+    url: '/api/v1/superuser/organizations/{organization_id}/workflows/{workflow_id}/inspection';
+};
+
+export type InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetError = InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetErrors[keyof InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetErrors];
+
+export type InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: SuperuserAgentInspectionResponse;
+};
+
+export type InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetResponse = InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetResponses[keyof InspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGetResponses];
+
+export type CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostData = {
+    body: SuperuserTestRunRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Organization Id
+         */
+        organization_id: number;
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+    };
+    query?: never;
+    url: '/api/v1/superuser/organizations/{organization_id}/workflows/{workflow_id}/test-run';
+};
+
+export type CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostError = CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostErrors[keyof CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostErrors];
+
+export type CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: SuperuserTestRunResponse;
+};
+
+export type CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostResponse = CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostResponses[keyof CreateSuperadminTestRunApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdTestRunPostResponses];
+
 export type GetWorkflowRunsApiV1SuperuserWorkflowRunsGetData = {
     body?: never;
     headers?: {
@@ -8643,6 +9501,12 @@ export type GetWorkflowRunsApiV1SuperuserWorkflowRunsGetData = {
          * Sort order ('asc' or 'desc')
          */
         sort_order?: string | null;
+        /**
+         * Organization Id
+         *
+         * Restrict to runs owned by this organization
+         */
+        organization_id?: number | null;
     };
     url: '/api/v1/superuser/workflow-runs';
 };
@@ -11957,6 +12821,84 @@ export type SavePreferencesApiV1OrganizationsPreferencesPutResponses = {
 };
 
 export type SavePreferencesApiV1OrganizationsPreferencesPutResponse = SavePreferencesApiV1OrganizationsPreferencesPutResponses[keyof SavePreferencesApiV1OrganizationsPreferencesPutResponses];
+
+export type GetIdentityApiV1OrganizationsIdentityGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/organizations/identity';
+};
+
+export type GetIdentityApiV1OrganizationsIdentityGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetIdentityApiV1OrganizationsIdentityGetError = GetIdentityApiV1OrganizationsIdentityGetErrors[keyof GetIdentityApiV1OrganizationsIdentityGetErrors];
+
+export type GetIdentityApiV1OrganizationsIdentityGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: OrganizationIdentity;
+};
+
+export type GetIdentityApiV1OrganizationsIdentityGetResponse = GetIdentityApiV1OrganizationsIdentityGetResponses[keyof GetIdentityApiV1OrganizationsIdentityGetResponses];
+
+export type SaveIdentityApiV1OrganizationsIdentityPutData = {
+    body: OrganizationIdentity;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/organizations/identity';
+};
+
+export type SaveIdentityApiV1OrganizationsIdentityPutErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type SaveIdentityApiV1OrganizationsIdentityPutError = SaveIdentityApiV1OrganizationsIdentityPutErrors[keyof SaveIdentityApiV1OrganizationsIdentityPutErrors];
+
+export type SaveIdentityApiV1OrganizationsIdentityPutResponses = {
+    /**
+     * Successful Response
+     */
+    200: OrganizationIdentity;
+};
+
+export type SaveIdentityApiV1OrganizationsIdentityPutResponse = SaveIdentityApiV1OrganizationsIdentityPutResponses[keyof SaveIdentityApiV1OrganizationsIdentityPutResponses];
 
 export type ListTelephonyConfigurationsApiV1OrganizationsTelephonyConfigsGetData = {
     body?: never;

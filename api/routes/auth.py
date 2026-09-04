@@ -38,10 +38,37 @@ async def signup(request: SignupRequest):
         name=request.name,
     )
 
+    # Reject a duplicate external reference before creating anything: the
+    # reference must identify exactly one organization, and a caller that
+    # re-sends one is provisioning a customer that already exists.
+    external_reference = (
+        request.organization_external_reference.strip()
+        if request.organization_external_reference
+        else None
+    ) or None
+    if external_reference:
+        existing_organization = await db_client.get_organization_by_external_reference(
+            external_reference
+        )
+        if existing_organization is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Organization external reference already registered",
+            )
+
+    display_name = (
+        request.organization_display_name.strip()
+        if request.organization_display_name
+        else None
+    ) or None
+
     # Create organization for the user
     org_provider_id = f"org_{user.provider_id}"
     organization, _ = await db_client.get_or_create_organization_by_provider_id(
-        org_provider_id=org_provider_id, user_id=user.id
+        org_provider_id=org_provider_id,
+        user_id=user.id,
+        display_name=display_name,
+        external_reference=external_reference,
     )
 
     # Link user to organization
