@@ -10,7 +10,7 @@ from api.db import db_client
 from api.db.models import UserModel
 from api.enums import WebhookCredentialType
 from api.sdk_expose import sdk_expose
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user_with_selected_organization
 
 router = APIRouter(prefix="/credentials")
 
@@ -116,7 +116,7 @@ def build_credential_response(credential) -> CredentialResponse:
     ),
 )
 async def list_credentials(
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> List[CredentialResponse]:
     """
     List all webhook credentials for the user's organization.
@@ -139,7 +139,7 @@ async def list_credentials(
 @router.post("/")
 async def create_credential(
     request: CreateCredentialRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> CredentialResponse:
     """
     Create a new webhook credential.
@@ -183,7 +183,7 @@ async def create_credential(
 @router.get("/{credential_uuid}")
 async def get_credential(
     credential_uuid: str,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> CredentialResponse:
     """
     Get a specific webhook credential by UUID.
@@ -213,7 +213,7 @@ async def get_credential(
 async def update_credential(
     credential_uuid: str,
     request: UpdateCredentialRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> CredentialResponse:
     """
     Update a webhook credential.
@@ -265,7 +265,7 @@ async def update_credential(
 @router.delete("/{credential_uuid}")
 async def delete_credential(
     credential_uuid: str,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> dict:
     """
     Delete (soft delete) a webhook credential.

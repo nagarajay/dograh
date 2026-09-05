@@ -25,7 +25,7 @@ from api.enums import CallType, WorkflowRunMode, WorkflowRunState
 from api.errors.failure import failure_already_reported
 from api.errors.telephony_errors import TelephonyError
 from api.sdk_expose import sdk_expose
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user_with_selected_organization
 from api.services.call_concurrency import (
     CallConcurrencyLimitError,
     WorkflowRunSlotAlreadyBoundError,
@@ -90,7 +90,8 @@ def _get_execution_user_id(workflow) -> int:
     ),
 )
 async def initiate_call(
-    request: InitiateCallRequest, user: UserModel = Depends(get_user)
+    request: InitiateCallRequest,
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Initiate a call using the configured telephony provider from web browser. This is
     supposed to be a test call method for the draft version of the agent."""

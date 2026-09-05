@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from api.constants import DEPLOYMENT_MODE, UI_APP_URL
 from api.db import db_client
 from api.db.models import UserModel
-from api.services.auth.depends import get_user, get_user_with_selected_organization
+from api.services.auth.depends import get_user_with_selected_organization
 from api.services.mps_service_key_client import mps_service_key_client
 from api.services.reports import generate_usage_runs_report_csv
 from api.utils.artifacts import artifact_url
@@ -143,7 +143,9 @@ class DailyUsageBreakdownResponse(BaseModel):
 
 
 @router.get("/usage/current-period", response_model=CurrentUsageResponse)
-async def get_current_period_usage(user: UserModel = Depends(get_user)):
+async def get_current_period_usage(
+    user: UserModel = Depends(get_user_with_selected_organization),
+):
     """Get current reporting-period usage for the user's organization."""
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -172,7 +174,7 @@ async def _oss_mps_credits_response(user: UserModel) -> MPSBillingCreditsRespons
 async def get_billing_credits(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Return per-key MPS credits (OSS) or the org's paginated billing ledger."""
     try:
@@ -384,7 +386,7 @@ async def get_usage_history(
         description="Sort order ('asc' or 'desc').",
         pattern="^(asc|desc)$",
     ),
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Get paginated workflow runs with usage for the organization."""
     if not user.selected_organization_id:
@@ -467,7 +469,7 @@ async def download_usage_runs_report(
         None,
         description=FILTERS_DESCRIPTION,
     ),
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> StreamingResponse:
     """Download a CSV of runs matching the same filters as `/usage/runs`."""
     if not user.selected_organization_id:
@@ -500,7 +502,7 @@ async def download_usage_runs_report(
 @router.get("/usage/daily-breakdown", response_model=DailyUsageBreakdownResponse)
 async def get_daily_usage_breakdown(
     days: int = Query(7, ge=1, le=30, description="Number of days to include"),
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Get daily usage breakdown for the last N days. Only available for organizations with pricing."""
     if not user.selected_organization_id:

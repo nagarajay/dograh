@@ -10,7 +10,7 @@ from api.schemas.service_key import (
     CreateServiceKeyResponse,
     ServiceKeyResponse,
 )
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user, get_user_with_selected_organization
 from api.services.mps_service_key_client import mps_service_key_client
 
 router = APIRouter()
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.get("/user/service-keys", response_model=List[ServiceKeyResponse])
 async def get_service_keys(
     include_archived: bool = False,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Get all service keys for the user's organization."""
     try:
@@ -48,7 +48,7 @@ async def get_service_keys(
 @router.post("/user/service-keys", response_model=CreateServiceKeyResponse)
 async def create_service_key(
     request: CreateServiceKeyRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Create a new service key for the user's organization."""
     try:
@@ -86,7 +86,7 @@ async def create_service_key(
 @router.delete("/user/service-keys/{service_key_id}")
 async def archive_service_key(
     service_key_id: str,  # Changed from int to str since MPS uses string IDs
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Archive a service key."""
     try:

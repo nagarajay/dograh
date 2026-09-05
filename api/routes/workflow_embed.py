@@ -10,7 +10,7 @@ from api.constants import BACKEND_API_ENDPOINT, ENVIRONMENT, UI_APP_URL
 from api.db import db_client
 from api.db.models import EmbedTokenModel, UserModel
 from api.enums import PostHogEvent
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user_with_selected_organization
 from api.services.posthog_client import capture_event
 
 router = APIRouter(prefix="/workflow")
@@ -64,7 +64,7 @@ async def create_or_update_embed_token(
     workflow_id: int,
     request: Request,
     embed_request: EmbedTokenRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> EmbedTokenResponse:
     """
     Create or update an embed token for a workflow.
@@ -143,7 +143,7 @@ async def create_or_update_embed_token(
 async def get_embed_token(
     workflow_id: int,
     request: Request,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> Optional[EmbedTokenResponse]:
     """
     Get the embed token for a workflow if it exists.
@@ -187,7 +187,7 @@ async def get_embed_token(
 @router.delete("/{workflow_id}/embed-token")
 async def deactivate_embed_token(
     workflow_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> dict:
     """
     Deactivate the embed token for a workflow.

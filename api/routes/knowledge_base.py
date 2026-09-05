@@ -18,7 +18,7 @@ from api.schemas.knowledge_base import (
     ProcessDocumentRequestSchema,
 )
 from api.sdk_expose import sdk_expose
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user_with_selected_organization
 from api.services.posthog_client import capture_event
 from api.services.storage import storage_fs
 from api.tasks.arq import enqueue_job
@@ -34,7 +34,7 @@ router = APIRouter(prefix="/knowledge-base", tags=["knowledge-base"])
 )
 async def get_upload_url(
     request: DocumentUploadRequestSchema,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Generate a presigned PUT URL for uploading a document.
 
@@ -95,7 +95,7 @@ async def get_upload_url(
 )
 async def process_document(
     request: ProcessDocumentRequestSchema,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Trigger asynchronous processing of an uploaded document.
 
@@ -204,7 +204,7 @@ async def list_documents(
     ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """List all documents for the user's organization.
 
@@ -264,7 +264,7 @@ async def list_documents(
 )
 async def get_document(
     document_uuid: str,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Get details of a specific document.
 
@@ -315,7 +315,7 @@ async def get_document(
 )
 async def delete_document(
     document_uuid: str,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Soft delete a document and its chunks.
 
@@ -355,7 +355,7 @@ async def delete_document(
 )
 async def search_chunks(
     request: ChunkSearchRequestSchema,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Search for document chunks similar to the query.
 

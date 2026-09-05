@@ -424,6 +424,7 @@ class SignalingManager:
         enforce_call_concurrency: bool = False,
         call_concurrency_source: str = "webrtc",
         allow_client_context_vars: bool = True,
+        actor_is_platform_admin: bool = False,
     ):
         """Handle WebSocket connection for signaling."""
         await websocket.accept()
@@ -445,6 +446,7 @@ class SignalingManager:
                     enforce_call_concurrency,
                     call_concurrency_source,
                     allow_client_context_vars,
+                    actor_is_platform_admin,
                 )
         except WebSocketDisconnect:
             logger.info(f"WebSocket disconnected for {connection_id}")
@@ -490,6 +492,7 @@ class SignalingManager:
         enforce_call_concurrency: bool,
         call_concurrency_source: str = "webrtc",
         allow_client_context_vars: bool = True,
+        actor_is_platform_admin: bool = False,
     ):
         """Handle incoming WebSocket messages."""
         msg_type = message.get("type")
@@ -507,6 +510,7 @@ class SignalingManager:
                 enforce_call_concurrency,
                 call_concurrency_source,
                 allow_client_context_vars,
+                actor_is_platform_admin,
             )
         elif msg_type == "ice-candidate":
             await self._handle_ice_candidate(payload, connection_key)
@@ -525,6 +529,7 @@ class SignalingManager:
         enforce_call_concurrency: bool,
         call_concurrency_source: str = "webrtc",
         allow_client_context_vars: bool = True,
+        actor_is_platform_admin: bool = False,
     ):
         """Handle offer message and create answer with ICE trickling."""
         pc_id = payload.get("pc_id")
@@ -555,6 +560,7 @@ class SignalingManager:
             organization_id=organization_id,
             workflow_run_id=workflow_run_id,
             actor_user=user,
+            actor_is_platform_admin=actor_is_platform_admin,
         )
         if not quota_result.has_quota:
             # Send error response for quota issues
@@ -861,13 +867,18 @@ async def signaling_websocket(
     user: UserModel = Depends(get_user_ws),
 ):
     """WebSocket endpoint for WebRTC signaling with ICE trickling."""
-    if not user.selected_organization_id:
-        raise HTTPException(status_code=400, detail="No organization selected")
-
-    workflow_run = await db_client.get_workflow_run(
-        workflow_run_id, organization_id=user.selected_organization_id
-    )
+    # A platform super-admin has no organization of their own, so the org-scoped
+    # lookup below is skipped rather than refused for them: their only route to a
+    # run here is the super-admin test-run branch, which authorizes from the run
+    # itself. Every other caller still needs a selected organization, and gets
+    # the same refusal as before if the branch does not apply.
     organization_id = user.selected_organization_id
+    workflow_run = None
+    actor_is_platform_admin = False
+    if organization_id:
+        workflow_run = await db_client.get_workflow_run(
+            workflow_run_id, organization_id=organization_id
+        )
 
     if not workflow_run:
         # One deliberate exception to organization scoping: the run this
@@ -879,12 +890,14 @@ async def signaling_websocket(
         # customer's.
         workflow_run = await _authorize_superadmin_test_run(user, workflow_run_id)
         if workflow_run is None:
+            if not organization_id:
+                raise HTTPException(status_code=400, detail="No organization selected")
             logger.warning(
-                f"workflow run {workflow_run_id} not found for org "
-                f"{user.selected_organization_id}"
+                f"workflow run {workflow_run_id} not found for org {organization_id}"
             )
             raise HTTPException(status_code=400, detail="Bad workflow_run_id")
         organization_id = workflow_run.workflow.organization_id
+        actor_is_platform_admin = True
         logger.info(
             f"superadmin test run {workflow_run_id} driven by user {user.id} "
             f"in organization {organization_id}"
@@ -904,6 +917,7 @@ async def signaling_websocket(
         organization_id,
         enforce_call_concurrency=True,
         call_concurrency_source="webrtc",
+        actor_is_platform_admin=actor_is_platform_admin,
     )
 
 

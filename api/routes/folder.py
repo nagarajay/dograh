@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 from api.db import db_client
 from api.db.folder_client import FolderNameConflictError
 from api.db.models import UserModel
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user_with_selected_organization
 
 router = APIRouter(prefix="/folder")
 
@@ -35,7 +35,7 @@ class UpdateFolderRequest(CreateFolderRequest):
 
 @router.get("/")
 async def list_folders(
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> list[FolderResponse]:
     """List all folders in the authenticated user's organization."""
     folders = await db_client.list_folders(
@@ -49,7 +49,7 @@ async def list_folders(
 @router.post("/")
 async def create_folder(
     request: CreateFolderRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> FolderResponse:
     """Create a new folder in the authenticated user's organization."""
     try:
@@ -66,7 +66,7 @@ async def create_folder(
 async def rename_folder(
     folder_id: int,
     request: UpdateFolderRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> FolderResponse:
     """Rename a folder owned by the authenticated user's organization."""
     try:
@@ -85,7 +85,7 @@ async def rename_folder(
 @router.delete("/{folder_id}")
 async def delete_folder(
     folder_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> dict[str, bool]:
     """Delete a folder. Member agents are moved to "Uncategorized", not deleted."""
     deleted = await db_client.delete_folder(

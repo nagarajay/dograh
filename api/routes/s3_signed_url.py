@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from api.db import db_client
 from api.enums import StorageBackend
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user, get_user_with_selected_organization
 from api.services.storage import get_storage_for_backend, storage_fs
 
 
@@ -177,7 +177,7 @@ async def get_signed_url(
             "When omitted the backend is inferred from the resource."
         ),
     ] = None,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Return a short-lived signed URL for a file stored on S3 / MinIO.
 
@@ -299,7 +299,7 @@ async def get_file_metadata(
 )
 async def get_presigned_upload_url(
     request: PresignedUploadUrlRequest,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Generate a presigned PUT URL for direct CSV file upload to S3/MinIO.
 

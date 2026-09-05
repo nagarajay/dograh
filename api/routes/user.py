@@ -17,7 +17,7 @@ from api.schemas.workflow_configurations import (
     WorkflowConfigurationDefaults,
     get_default_workflow_configurations,
 )
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user, get_user_with_selected_organization
 from api.services.configuration.ai_model_configuration import (
     convert_legacy_ai_model_configuration_to_v2,
     get_resolved_ai_model_configuration,
@@ -48,6 +48,11 @@ router = APIRouter(prefix="/user")
 class AuthUserResponse(TypedDict):
     id: int
     is_superuser: bool
+    # Null for a platform super-admin, who belongs to no client organization.
+    # This is the one authenticated endpoint that answers "does this user have
+    # an organization at all", so it stays reachable without one while every
+    # organization-scoped route refuses.
+    selected_organization_id: Optional[int]
 
 
 class DefaultConfigurationsResponse(BaseModel):
@@ -102,6 +107,7 @@ async def get_auth_user(
     return {
         "id": user.id,
         "is_superuser": user.is_superuser,
+        "selected_organization_id": user.selected_organization_id,
     }
 
 
@@ -137,7 +143,7 @@ def _is_validation_cache_stale(
 
 @router.get("/configurations/user")
 async def get_user_configurations(
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> UserConfigurationRequestResponseSchema:
     resolved_config = await get_resolved_ai_model_configuration(
         organization_id=user.selected_organization_id,
@@ -166,7 +172,7 @@ async def get_user_configurations(
 @router.put("/configurations/user")
 async def update_user_configurations(
     request: UserConfigurationRequestResponseSchema,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> UserConfigurationRequestResponseSchema:
     existing_config = (
         await get_resolved_ai_model_configuration(
@@ -276,7 +282,7 @@ async def update_user_onboarding_state(
 @router.get("/configurations/user/validate")
 async def validate_user_configurations(
     validity_ttl_seconds: int = Query(default=60, ge=0, le=86400),
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> APIKeyStatusResponse:
     resolved_config = await get_resolved_ai_model_configuration(
         organization_id=user.selected_organization_id,
@@ -334,7 +340,7 @@ class CreateAPIKeyResponse(BaseModel):
 @router.get("/api-keys")
 async def get_api_keys(
     include_archived: bool = Query(default=False),
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> List[APIKeyResponse]:
     """Get all API keys for the user's selected organization."""
     if not user.selected_organization_id:
@@ -361,7 +367,7 @@ async def get_api_keys(
 @router.post("/api-keys")
 async def create_api_key(
     request: CreateAPIKeyRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> CreateAPIKeyResponse:
     """Create a new API key for the user's selected organization."""
     if not user.selected_organization_id:
@@ -385,7 +391,7 @@ async def create_api_key(
 @router.delete("/api-keys/{api_key_id}")
 async def archive_api_key(
     api_key_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> dict:
     """Archive an API key (soft delete)."""
     if not user.selected_organization_id:
@@ -408,7 +414,7 @@ async def archive_api_key(
 @router.put("/api-keys/{api_key_id}/reactivate")
 async def reactivate_api_key(
     api_key_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> dict:
     """Reactivate an archived API key."""
     if not user.selected_organization_id:
@@ -464,7 +470,7 @@ async def get_voices(
     q: Optional[str] = None,
     gender: Optional[str] = None,
     accent: Optional[str] = None,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> VoicesResponse:
     """Get available voices for a TTS provider."""
     try:

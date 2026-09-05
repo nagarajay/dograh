@@ -231,7 +231,9 @@ async def get_current_organization_context(user: UserModel = Depends(get_user)):
     "/telephony-providers/metadata",
     response_model=TelephonyProvidersMetadataResponse,
 )
-async def get_telephony_providers_metadata(user: UserModel = Depends(get_user)):
+async def get_telephony_providers_metadata(
+    user: UserModel = Depends(get_user_with_selected_organization),
+):
     """Return the list of available telephony providers and their form schemas.
 
     The UI uses this to render the configuration form generically instead of
@@ -297,7 +299,9 @@ async def get_telephony_providers_metadata(user: UserModel = Depends(get_user)):
     "/telephony-config-warnings",
     response_model=TelephonyConfigWarningsResponse,
 )
-async def get_telephony_config_warnings(user: UserModel = Depends(get_user)):
+async def get_telephony_config_warnings(
+    user: UserModel = Depends(get_user_with_selected_organization),
+):
     """Return aggregated warning counts for the current org's telephony configs.
 
     Surfaces provider configs missing webhook-verification credentials.
@@ -875,7 +879,9 @@ async def _sync_inbound_for_phone_number(
 
 
 @router.get("/telephony-configs", response_model=TelephonyConfigurationListResponse)
-async def list_telephony_configurations(user: UserModel = Depends(get_user)):
+async def list_telephony_configurations(
+    user: UserModel = Depends(get_user_with_selected_organization),
+):
     """List the org's telephony configurations with phone-number counts."""
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -925,7 +931,7 @@ async def list_telephony_configurations(user: UserModel = Depends(get_user)):
 @router.post("/telephony-configs", response_model=TelephonyConfigurationDetail)
 async def create_telephony_configuration(
     request: TelephonyConfigurationCreateRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Create a new telephony configuration for the org."""
     if not user.selected_organization_id:
@@ -973,7 +979,7 @@ async def create_telephony_configuration(
     "/telephony-configs/{config_id}", response_model=TelephonyConfigurationDetail
 )
 async def get_telephony_configuration_by_id(
-    config_id: int, user: UserModel = Depends(get_user)
+    config_id: int, user: UserModel = Depends(get_user_with_selected_organization)
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -992,7 +998,7 @@ async def get_telephony_configuration_by_id(
 async def update_telephony_configuration(
     config_id: int,
     request: TelephonyConfigurationUpdateRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1052,7 +1058,9 @@ async def update_telephony_configuration(
     "/telephony-configs/{config_id}/set-default-outbound",
     response_model=TelephonyConfigurationDetail,
 )
-async def set_default_outbound(config_id: int, user: UserModel = Depends(get_user)):
+async def set_default_outbound(
+    config_id: int, user: UserModel = Depends(get_user_with_selected_organization)
+):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
 
@@ -1069,7 +1077,7 @@ async def set_default_outbound(config_id: int, user: UserModel = Depends(get_use
     response_model=TelephonyConfigurationDetail,
 )
 async def reactivate_telephony_configuration(
-    config_id: int, user: UserModel = Depends(get_user)
+    config_id: int, user: UserModel = Depends(get_user_with_selected_organization)
 ):
     """Clear the inactive flag so connection workers pick the config up again.
 
@@ -1096,7 +1104,7 @@ async def reactivate_telephony_configuration(
 
 @router.delete("/telephony-configs/{config_id}")
 async def delete_telephony_configuration(
-    config_id: int, user: UserModel = Depends(get_user)
+    config_id: int, user: UserModel = Depends(get_user_with_selected_organization)
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1227,7 +1235,9 @@ async def _reject_duplicate_trunk_name(
 
 
 @router.get("/telephony-configs/{config_id}/trunks", response_model=TrunkListResponse)
-async def list_telephony_trunks(config_id: int, user: UserModel = Depends(get_user)):
+async def list_telephony_trunks(
+    config_id: int, user: UserModel = Depends(get_user_with_selected_organization)
+):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
 
@@ -1249,7 +1259,7 @@ async def list_telephony_trunks(config_id: int, user: UserModel = Depends(get_us
 async def create_telephony_trunk(
     config_id: int,
     request: TrunkCreateRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1292,7 +1302,7 @@ async def update_telephony_trunk(
     config_id: int,
     trunk_id: int,
     request: TrunkUpdateRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1348,7 +1358,9 @@ async def update_telephony_trunk(
 
 @router.delete("/telephony-configs/{config_id}/trunks/{trunk_id}")
 async def delete_telephony_trunk(
-    config_id: int, trunk_id: int, user: UserModel = Depends(get_user)
+    config_id: int,
+    trunk_id: int,
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1425,7 +1437,9 @@ async def _ensure_workflow_belongs_to_org(workflow_id: int, organization_id: int
     "/telephony-configs/{config_id}/phone-numbers",
     response_model=PhoneNumberListResponse,
 )
-async def list_phone_numbers(config_id: int, user: UserModel = Depends(get_user)):
+async def list_phone_numbers(
+    config_id: int, user: UserModel = Depends(get_user_with_selected_organization)
+):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
     await _ensure_config_belongs_to_org(config_id, user.selected_organization_id)
@@ -1443,7 +1457,7 @@ async def list_phone_numbers(config_id: int, user: UserModel = Depends(get_user)
 async def create_phone_number(
     config_id: int,
     request: PhoneNumberCreateRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1517,7 +1531,7 @@ async def create_phone_number(
 async def get_phone_number(
     config_id: int,
     phone_number_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1537,7 +1551,7 @@ async def update_phone_number(
     config_id: int,
     phone_number_id: int,
     request: PhoneNumberUpdateRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1590,7 +1604,7 @@ async def update_phone_number(
 async def set_default_caller_id(
     config_id: int,
     phone_number_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1606,7 +1620,7 @@ async def set_default_caller_id(
 async def delete_phone_number(
     config_id: int,
     phone_number_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1659,7 +1673,9 @@ class LangfuseCredentialsResponse(BaseModel):
 
 
 @router.get("/langfuse-credentials", response_model=LangfuseCredentialsResponse)
-async def get_langfuse_credentials(user: UserModel = Depends(get_user)):
+async def get_langfuse_credentials(
+    user: UserModel = Depends(get_user_with_selected_organization),
+):
     """Get Langfuse credentials for the user's organization with masked sensitive fields."""
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1684,7 +1700,7 @@ async def get_langfuse_credentials(user: UserModel = Depends(get_user)):
 @router.post("/langfuse-credentials")
 async def save_langfuse_credentials(
     request: LangfuseCredentialsRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Save Langfuse credentials for the user's organization."""
     if not user.selected_organization_id:
@@ -1726,7 +1742,9 @@ async def save_langfuse_credentials(
 
 
 @router.delete("/langfuse-credentials")
-async def delete_langfuse_credentials(user: UserModel = Depends(get_user)):
+async def delete_langfuse_credentials(
+    user: UserModel = Depends(get_user_with_selected_organization),
+):
     """Delete Langfuse credentials for the user's organization."""
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
@@ -1792,7 +1810,9 @@ class CampaignDefaultsResponse(BaseModel):
 
 
 @router.get("/campaign-defaults", response_model=CampaignDefaultsResponse)
-async def get_campaign_defaults(user: UserModel = Depends(get_user)):
+async def get_campaign_defaults(
+    user: UserModel = Depends(get_user_with_selected_organization),
+):
     """Get campaign limits for the user's organization.
 
     Returns the organization's concurrent call limit and default retry configuration.

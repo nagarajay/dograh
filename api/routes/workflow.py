@@ -26,7 +26,7 @@ from api.schemas.ai_model_configuration import OrganizationAIModelConfigurationV
 from api.schemas.workflow import WorkflowRunResponseSchema
 from api.schemas.workflow_configurations import WorkflowConfigurationDefaults
 from api.sdk_expose import sdk_expose
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user_with_selected_organization
 from api.services.configuration.ai_model_configuration import (
     WORKFLOW_MODEL_CONFIGURATION_V2_OVERRIDE_KEY,
     check_for_masked_keys_in_ai_model_configuration_v2,
@@ -383,7 +383,7 @@ class CreateWorkflowTemplateRequest(BaseModel):
 @router.post("/{workflow_id}/validate")
 async def validate_workflow(
     workflow_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> ValidateWorkflowResponse:
     """
     Validate all nodes in a workflow to ensure they have required fields.
@@ -452,7 +452,8 @@ def _transform_schema_errors(
     ),
 )
 async def create_workflow(
-    request: CreateWorkflowRequest, user: UserModel = Depends(get_user)
+    request: CreateWorkflowRequest,
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowResponse:
     """
     Create a new workflow from the client
@@ -536,7 +537,7 @@ async def create_workflow(
 @router.post("/create/template")
 async def create_workflow_from_template(
     request: CreateWorkflowTemplateRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowResponse:
     """
     Create a new workflow from a natural language template request.
@@ -655,7 +656,7 @@ class WorkflowSummaryResponse(BaseModel):
 
 @router.get("/count")
 async def get_workflow_count(
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowCountResponse:
     """Get workflow counts for the authenticated user's organization.
 
@@ -706,7 +707,7 @@ def _validate_status_filter(status: Optional[str]) -> List[str]:
     ),
 )
 async def get_workflows(
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
     status: Optional[str] = Query(
         None,
         description="Filter by status - can be single value (active/archived) or comma-separated (active,archived)",
@@ -762,7 +763,7 @@ async def get_workflows(
 )
 async def get_workflow(
     workflow_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowResponse:
     """Get a single workflow by ID.
 
@@ -812,7 +813,7 @@ async def get_workflow_versions(
     workflow_id: int,
     limit: int | None = Query(None, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> list[WorkflowVersionResponse]:
     """List versions for a workflow, newest first.
 
@@ -851,7 +852,7 @@ async def get_workflow_versions(
 @router.post("/{workflow_id}/publish")
 async def publish_workflow(
     workflow_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Publish the current draft version of a workflow.
 
@@ -905,7 +906,7 @@ async def publish_workflow(
 @router.post("/{workflow_id}/create-draft")
 async def create_workflow_draft(
     workflow_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowVersionResponse:
     """Create a draft version from the current published version.
 
@@ -936,7 +937,7 @@ async def create_workflow_draft(
 
 @router.get("/summary")
 async def get_workflows_summary(
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
     status: Optional[str] = Query(
         None,
         description="Filter by status (e.g. 'active' or 'archived'). Omit to return all.",
@@ -967,7 +968,7 @@ async def get_workflows_summary(
 async def update_workflow_status(
     workflow_id: int,
     request: UpdateWorkflowStatusRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowResponse:
     """
     Update the status of a workflow (e.g., archive/unarchive).
@@ -1012,7 +1013,7 @@ async def update_workflow_status(
 async def move_workflow_to_folder(
     workflow_id: int,
     request: MoveWorkflowToFolderRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowListResponse:
     """Move a workflow into a folder, or to "Uncategorized" (folder_id=null).
 
@@ -1060,7 +1061,7 @@ async def move_workflow_to_folder(
 async def update_workflow(
     workflow_id: int,
     request: UpdateWorkflowRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowResponse:
     """
     Update an existing workflow.
@@ -1333,7 +1334,7 @@ async def update_workflow(
 @router.post("/{workflow_id}/duplicate")
 async def duplicate_workflow_endpoint(
     workflow_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowResponse:
     """Duplicate a workflow including its definition, configuration, recordings, and triggers."""
     try:
@@ -1380,7 +1381,7 @@ async def duplicate_workflow_endpoint(
 async def create_workflow_run(
     workflow_id: int,
     request: CreateWorkflowRunRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> CreateWorkflowRunResponse:
     """
     Create a new workflow run when the user decides to execute the workflow via chat or voice
@@ -1445,7 +1446,9 @@ async def create_workflow_run(
 
 @router.get("/{workflow_id}/runs/{run_id}")
 async def get_workflow_run(
-    workflow_id: int, run_id: int, user: UserModel = Depends(get_user)
+    workflow_id: int,
+    run_id: int,
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowRunResponseSchema:
     run = await db_client.get_workflow_run(
         run_id, organization_id=user.selected_organization_id
@@ -1522,7 +1525,7 @@ async def get_workflow_runs(
     sort_order: Optional[str] = Query(
         "desc", description="Sort order ('asc' or 'desc')"
     ),
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowRunsResponse:
     """
     Get workflow runs with optional filtering and sorting.
@@ -1580,7 +1583,7 @@ async def get_workflow_runs(
 @router.get("/{workflow_id}/report")
 async def download_workflow_report(
     workflow_id: int,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
     start_date: Optional[datetime] = Query(
         None, description="Filter runs created on or after this datetime (ISO 8601)"
     ),
@@ -1633,7 +1636,8 @@ async def get_workflow_templates() -> List[WorkflowTemplateResponse]:
 
 @router.post("/templates/duplicate")
 async def duplicate_workflow_template(
-    request: DuplicateTemplateRequest, user: UserModel = Depends(get_user)
+    request: DuplicateTemplateRequest,
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> WorkflowResponse:
     """
     Duplicate a workflow template to create a new workflow for the user.
@@ -1721,7 +1725,7 @@ class AmbientNoiseUploadResponse(BaseModel):
 )
 async def get_ambient_noise_upload_url(
     request: AmbientNoiseUploadRequest,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Generate a presigned PUT URL for uploading a custom ambient noise file."""
     # Verify user owns this workflow

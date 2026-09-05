@@ -152,7 +152,9 @@ export default function SuperadminOrganizationsPage() {
                                     {organizations.length === 0 && (
                                         <TableRow>
                                             <TableCell colSpan={8} className="text-center text-muted-foreground">
-                                                No organizations found.
+                                                {search
+                                                    ? "No organizations match this search."
+                                                    : "No client organizations yet. One is created when the first AVSIQ client is provisioned."}
                                             </TableCell>
                                         </TableRow>
                                     )}
@@ -163,7 +165,16 @@ export default function SuperadminOrganizationsPage() {
                                                     href={`/superadmin/organizations/${organization.id}`}
                                                     className="font-medium underline-offset-2 hover:underline"
                                                 >
-                                                    {organization.display_name || "Unnamed client"}
+                                                    {/* No "Unnamed client" fallback: a row without a
+                                                        display name is an organization whose identity was
+                                                        never recorded, not a client called nothing. Show
+                                                        the identity that does exist — the provider id —
+                                                        so the gap is visible rather than papered over. */}
+                                                    {organization.display_name || (
+                                                        <span className="font-mono text-xs text-muted-foreground">
+                                                            {organization.provider_id}
+                                                        </span>
+                                                    )}
                                                 </Link>
                                             </TableCell>
                                             <TableCell className="font-mono text-xs">

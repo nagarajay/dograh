@@ -172,7 +172,15 @@ export default function SuperadminOrganizationDetailPage() {
 
             <Card>
                 <CardHeader>
-                    <CardTitle>{organization.display_name || "Unnamed client"}</CardTitle>
+                    {/* See the organizations list: an organization with no display
+                        name is unnamed, not a client named "Unnamed client". */}
+                    <CardTitle>
+                        {organization.display_name || (
+                            <span className="font-mono text-base text-muted-foreground">
+                                {organization.provider_id}
+                            </span>
+                        )}
+                    </CardTitle>
                     <CardDescription className="font-mono text-xs">
                         Dograh org {organization.id} · {organization.provider_id}
                         {organization.external_reference

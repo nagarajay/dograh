@@ -624,12 +624,24 @@ async def authorize_workflow_run_start(
     organization_id: int,
     workflow_run_id: int | None = None,
     actor_user: UserModel | None = None,
+    actor_is_platform_admin: bool = False,
 ) -> QuotaCheckResult:
     """Authorize a workflow run before any billable call/text runtime starts.
 
     The workflow organization is the billing subject for hosted deployments.
     OSS deployments are billed per service key instead. The workflow owner is
     used only as billing metadata.
+
+    ``actor_is_platform_admin`` is how a platform super-admin drives another
+    organization's agent from the super-admin console. Membership is the wrong
+    question for that actor: a platform super-admin is deliberately not a member
+    of any client organization, so the membership check below would deny a run
+    the caller has already authorized. The caller must have established that
+    authority itself -- ``_authorize_superadmin_test_run`` in
+    ``api/routes/webrtc_signaling.py`` requires the superuser flag *and* that the
+    run was created by this same superuser from the console -- because this flag
+    is trusted, not verified, here. Everything downstream still runs in the
+    customer's organization: quota, concurrency, configuration and billing.
     """
     if organization_id is None:
         logger.warning(
@@ -687,7 +699,15 @@ async def authorize_workflow_run_start(
                 error_message="Workflow not found",
             )
 
-        if actor_id is not None:
+        if actor_id is not None and actor_is_platform_admin:
+            logger.info(
+                "Workflow start authorization: platform super-admin {} acting on "
+                "workflow {} in org {} without membership",
+                actor_id,
+                workflow_id,
+                organization_id,
+            )
+        elif actor_id is not None:
             try:
                 is_member = await db_client.is_user_member_of_organization(
                     user_id=actor_id,

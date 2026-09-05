@@ -29,7 +29,7 @@ from api.schemas.tool import (
     UpdateToolRequest,
 )
 from api.sdk_expose import sdk_expose
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user, get_user_with_selected_organization
 from api.services.tool_management import (
     ToolManagementError,
     build_tool_response,
@@ -103,7 +103,7 @@ def validate_status(status: str) -> None:
 async def list_tools(
     status: str | None = None,
     category: str | None = None,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> list[ToolResponse]:
     """
     List all tools for the user's organization.
@@ -163,7 +163,7 @@ async def create_tool(
 @router.get("/{tool_uuid}")
 async def get_tool(
     tool_uuid: str,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> ToolResponse:
     """
     Get a specific tool by UUID.
@@ -207,7 +207,7 @@ async def refresh_mcp_tools(
 async def test_tool(
     tool_uuid: str,
     request: ToolTestRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> ToolTestResponse:
     """Execute an HTTP API tool with sample LLM and preset parameters."""
     if not user.selected_organization_id:
@@ -347,7 +347,7 @@ def _hint_for_status_code(
 async def update_tool(
     tool_uuid: str,
     request: UpdateToolRequest,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> ToolResponse:
     """
     Update a tool.
@@ -402,7 +402,7 @@ async def update_tool(
 @router.delete("/{tool_uuid}")
 async def delete_tool(
     tool_uuid: str,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> dict:
     """
     Archive (soft delete) a tool.
@@ -429,7 +429,7 @@ async def delete_tool(
 @router.post("/{tool_uuid}/unarchive")
 async def unarchive_tool(
     tool_uuid: str,
-    user: UserModel = Depends(get_user),
+    user: UserModel = Depends(get_user_with_selected_organization),
 ) -> ToolResponse:
     """
     Unarchive a tool (restore from archived state).

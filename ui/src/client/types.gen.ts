@@ -308,6 +308,10 @@ export type AuthUserResponse = {
      * Is Superuser
      */
     is_superuser: boolean;
+    /**
+     * Selected Organization Id
+     */
+    selected_organization_id: number | null;
 };
 
 /**

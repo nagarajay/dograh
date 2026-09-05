@@ -20,7 +20,7 @@ from api.schemas.workflow_recording import (
     RecordingUploadResponseSchema,
 )
 from api.sdk_expose import sdk_expose
-from api.services.auth.depends import get_user
+from api.services.auth.depends import get_user_with_selected_organization
 from api.services.mps_service_key_client import mps_service_key_client
 from api.services.storage import storage_fs
 
@@ -65,7 +65,7 @@ def _build_response(rec) -> RecordingResponseSchema:
 )
 async def get_upload_urls(
     request: BatchRecordingUploadRequestSchema,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Generate presigned PUT URLs for uploading one or more audio recordings."""
     try:
@@ -125,7 +125,7 @@ async def get_upload_urls(
 )
 async def create_recordings(
     request: BatchRecordingCreateRequestSchema,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Create one or more recording records after audio files have been uploaded."""
     try:
@@ -184,7 +184,7 @@ async def list_recordings(
     tts_voice_id: Annotated[
         Optional[str], Query(description="Filter by TTS voice ID")
     ] = None,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """List recordings for the organization, optionally filtered."""
     try:
@@ -214,7 +214,7 @@ async def list_recordings(
 )
 async def delete_recording(
     recording_id: str,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Soft delete a recording."""
     try:
@@ -249,7 +249,7 @@ async def delete_recording(
 async def update_recording(
     id: int,
     request: RecordingUpdateRequestSchema,
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Update the recording_id (descriptive name) of a recording."""
     try:
@@ -316,7 +316,7 @@ async def update_recording(
 async def transcribe_audio(
     file: UploadFile = File(...),
     language: str = Form("en"),
-    user=Depends(get_user),
+    user=Depends(get_user_with_selected_organization),
 ):
     """Transcribe an uploaded audio file using MPS STT."""
     try:
