@@ -1,11 +1,19 @@
+from datetime import datetime, timezone
 from typing import List, Optional
 
+from loguru import logger
 from sqlalchemy import and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 
 from api.db.base_client import BaseDBClient
 from api.db.models import APIKeyModel
 from api.utils.api_key import generate_api_key, hash_api_key
+
+# How many times a losing racer re-runs archive-then-insert before giving up.
+# Each attempt observes the winner's committed state, so one retry is enough in
+# practice; the bound exists so a pathological loop cannot spin forever.
+_REPLACE_ATTEMPTS = 3
 
 
 class APIKeyClient(BaseDBClient):
@@ -34,6 +42,94 @@ class APIKeyClient(BaseDBClient):
             await session.refresh(api_key)
 
             return api_key, raw_api_key
+
+    async def replace_api_key_by_name(
+        self, organization_id: int, name: str, created_by: Optional[int] = None
+    ) -> tuple[APIKeyModel, str, list[int]]:
+        """Rotate the organization's one key with this name, atomically.
+
+        Archives every active key the organization holds under ``name`` and
+        issues a replacement in the same transaction, so the organization is
+        never briefly without a key and never briefly holding two.
+
+        This is what makes minting retry-safe. ``create_api_key`` appends: a
+        caller that retries because it lost the response leaves behind a live
+        credential nobody holds, and no later call can tell which of the two the
+        caller actually has. Replacing means the answer after any number of
+        retries is the same -- one active key, and it is the one the last
+        response returned.
+
+        Returns ``(api_key, raw_key, archived_ids)``. ``archived_ids`` is the
+        keys this call invalidated, which is the caller's evidence that the
+        rotation happened rather than a no-op.
+        """
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                return await self._replace_api_key_by_name(
+                    organization_id, name, created_by
+                )
+            except IntegrityError:
+                # A concurrent replacement committed between this call's
+                # archive statement and its insert, and the partial unique
+                # index refused the second active row -- which is the whole
+                # point of that index. Re-running now observes the winner's key
+                # and archives it, so the retry converges instead of failing.
+                if attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                logger.warning(
+                    "Contended replacement of api key {!r} for organization "
+                    "{}; retrying",
+                    name,
+                    organization_id,
+                )
+        raise AssertionError("unreachable")
+
+    async def _replace_api_key_by_name(
+        self, organization_id: int, name: str, created_by: Optional[int]
+    ) -> tuple[APIKeyModel, str, list[int]]:
+        raw_api_key, key_hash, key_prefix = generate_api_key()
+        now = datetime.now(timezone.utc)
+
+        async with self.async_session() as session:
+            existing = (
+                (
+                    await session.execute(
+                        select(APIKeyModel).where(
+                            and_(
+                                APIKeyModel.organization_id == organization_id,
+                                APIKeyModel.name == name,
+                                APIKeyModel.is_active == True,  # noqa: E712
+                                APIKeyModel.archived_at.is_(None),
+                            )
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            archived_ids = []
+            for api_key in existing:
+                api_key.is_active = False
+                api_key.archived_at = now
+                archived_ids.append(api_key.id)
+
+            replacement = APIKeyModel(
+                organization_id=organization_id,
+                name=name,
+                key_hash=key_hash,
+                key_prefix=key_prefix,
+                created_by=created_by,
+                is_active=True,
+            )
+            session.add(replacement)
+
+            # One commit for both halves: a crash between them would otherwise
+            # either revoke the caller's only key or leave two live.
+            await session.commit()
+            await session.refresh(replacement)
+
+            return replacement, raw_api_key, archived_ids
 
     async def get_api_keys_by_organization(
         self, organization_id: int, include_archived: bool = False

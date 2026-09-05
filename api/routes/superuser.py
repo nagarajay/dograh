@@ -3,12 +3,13 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 from api.db import db_client
 from api.db.models import UserModel
 from api.enums import CallType, WorkflowRunMode
 from api.services.auth.depends import get_superuser
+from api.services.auth.platform_admin import require_platform_admin
 from api.services.auth.stack_auth import (
     StackAuthSessionError,
     StackAuthUserSearchError,
@@ -17,6 +18,12 @@ from api.services.auth.stack_auth import (
 from api.services.superuser.agent_inspection import get_agent_inspection
 from api.services.superuser.org_health import (
     get_organization_operational_state,
+)
+from api.services.superuser.provisioning import (
+    OrganizationNotFound,
+    ProvisioningConflict,
+    mint_organization_api_key,
+    provision_client_organization,
 )
 from api.services.superuser.test_runs import superadmin_test_run_extra
 from api.services.workflow.run_creation import prepare_workflow_run_inputs
@@ -74,9 +81,15 @@ class SuperuserWorkflowRunsListResponse(BaseModel):
 class SuperuserOrganizationSummary(BaseModel):
     """One organization as it appears in the super-admin organization list.
 
-    Identity is the Dograh organization id plus the auth provider's id. No
-    display name is resolved: names live in the auth provider, not in Dograh,
-    and fetching them would mean an outbound call per row.
+    Every row is a client tenant: one Dograh organization per AVSIQ client, and
+    no platform-internal organizations exist to filter out. A database with no
+    clients provisioned therefore lists nothing at all.
+
+    ``display_name`` and ``external_reference`` are Dograh's own columns,
+    recorded when the client is provisioned. Both are nullable and are returned
+    verbatim, including as ``None``: an organization whose identity was never
+    recorded is unnamed, and presenting it as a client called something would
+    hide the omission rather than surface it.
     """
 
     id: int
@@ -615,6 +628,12 @@ async def create_superadmin_test_run(
     )
     initial_context["direction"] = call_type.value
 
+    # The run's owning user is deliberately the super-admin, not the agent's
+    # owner: a super-admin belongs to no client organization, and stamping a
+    # customer's user id here would record a call that customer never placed.
+    # Organization scope still comes from the workflow (see
+    # api/db/workflow_run_client.py), so quota, concurrency, configuration and
+    # billing remain the customer's; only the actor is the platform's.
     run = await db_client.create_workflow_run(
         request.name or f"superadmin-test-{workflow.id}",
         workflow_id,
@@ -694,4 +713,174 @@ async def get_workflow_runs(
         page=page,
         limit=limit,
         total_pages=total_pages,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Platform provisioning
+#
+# These two endpoints share the /superuser prefix with the console's read APIs
+# above, and share nothing else. They are guarded by ``require_platform_admin``
+# -- a server-to-server shared secret -- rather than by ``get_superuser``,
+# which is an interactive human session and stays exactly as strict as it was.
+# Neither endpoint resolves a UserModel, so neither has a caller organization
+# that could leak into the tenant it acts on: the target is named explicitly.
+# ---------------------------------------------------------------------------
+
+
+class PlatformOrganizationRequest(BaseModel):
+    """Everything the platform must supply to create one client tenant.
+
+    Notably absent: a password. The service account's credential is generated
+    inside Dograh, hashed, and discarded, so the provisioning system never
+    holds a password it would have to vault, rotate, or leak. What it holds
+    afterwards is the organization API key minted by the endpoint below.
+    """
+
+    display_name: str = Field(min_length=1, max_length=128)
+    external_reference: str = Field(
+        min_length=1,
+        max_length=128,
+        description=(
+            "The provisioning system's own identifier for this client. Unique "
+            "across organizations, and the key this endpoint is idempotent on."
+        ),
+    )
+    service_email: EmailStr = Field(
+        description="Address of the service identity that will own the tenant."
+    )
+
+
+class PlatformOrganizationResponse(BaseModel):
+    organization_id: int
+    organization_provider_id: str
+    display_name: Optional[str]
+    external_reference: Optional[str]
+    service_user_id: int
+    service_user_email: Optional[str]
+    service_user_provider_id: str
+    #: False when the request matched an existing organization. The rest of the
+    #: response is the same either way, so a caller that lost its bookkeeping
+    #: can re-send and recover the mapping.
+    created: bool
+    #: Whether managed model configuration and SIP connectivity are in place.
+    #: False is recoverable -- retry this endpoint, or let the tenant's own
+    #: authenticated traffic re-enter bootstrap.
+    bootstrapped: bool
+
+
+class PlatformAPIKeyResponse(BaseModel):
+    """The raw key appears here and nowhere else, ever.
+
+    Only the hash is stored. A caller that loses this response can safely mint
+    again: the endpoint replaces rather than appends, so retrying costs the
+    previous key its validity and nothing else.
+
+    There is no request body. The key's name is reserved and deterministic --
+    that is precisely what a retry needs in order to find and replace the
+    previous key rather than add another one beside it.
+    """
+
+    id: int
+    organization_id: int
+    name: str
+    key_prefix: str
+    api_key: str
+    created_at: datetime
+    #: Keys this call invalidated. Empty on a first mint, one id on a retry.
+    #: The caller's evidence that the credential it previously held (and may
+    #: have lost) is now dead rather than still live and unaccounted for.
+    replaced_key_ids: List[int]
+    #: True when this call rotated an existing key rather than issuing a first
+    #: one. Purely informational: both outcomes are success, and a caller that
+    #: cannot tell which of its attempts got through does not have to care.
+    rotated: bool
+
+
+@router.post(
+    "/organizations",
+    dependencies=[Depends(require_platform_admin)],
+    status_code=status.HTTP_200_OK,
+)
+async def provision_organization(
+    request: PlatformOrganizationRequest,
+) -> PlatformOrganizationResponse:
+    """Provision one client tenant: service identity, organization, bootstrap.
+
+    Idempotent on ``external_reference``. An exact retry returns the existing
+    organization with ``created=false``; a retry whose display name or service
+    email contradicts the live tenant is refused with 409 rather than applied,
+    because the reference names a client that may already be placing calls.
+
+    Deliberately 200 rather than 201: the same request produces the same
+    response whether or not this call was the one that created the row, and a
+    status code that flips between retries is a status code callers branch on.
+    """
+    try:
+        provisioned = await provision_client_organization(
+            display_name=request.display_name,
+            external_reference=request.external_reference,
+            service_email=request.service_email,
+        )
+    except ProvisioningConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    organization = provisioned.organization
+    service_user = provisioned.service_user
+
+    return PlatformOrganizationResponse(
+        organization_id=organization.id,
+        organization_provider_id=organization.provider_id,
+        display_name=organization.display_name,
+        external_reference=organization.external_reference,
+        service_user_id=service_user.id,
+        service_user_email=service_user.email,
+        service_user_provider_id=service_user.provider_id,
+        created=provisioned.created,
+        bootstrapped=provisioned.bootstrapped,
+    )
+
+
+@router.post(
+    "/organizations/{organization_id}/api-keys",
+    dependencies=[Depends(require_platform_admin)],
+    status_code=status.HTTP_200_OK,
+)
+async def mint_platform_api_key(
+    organization_id: int,
+) -> PlatformAPIKeyResponse:
+    """Issue -- or re-issue -- a tenant's provisioning API key, as the platform.
+
+    Safely repeatable. The key carries a reserved name and every call replaces
+    the one holding it, atomically, so a caller that retries after a lost
+    response ends up with exactly one live credential rather than one live
+    credential per attempt. Two concurrent retries collapse to one too: the
+    partial unique index behind this refuses a second active row, and the loser
+    re-runs against the winner's state.
+
+    The key that comes back is an ordinary tenant credential and carries no
+    platform authority whatsoever -- it cannot reach this endpoint, or any other
+    endpoint under this prefix.
+
+    200 rather than 201: a retry is the same request as the original and must
+    not report a different status depending on which attempt won.
+    """
+    try:
+        api_key, raw_key, archived_ids = await mint_organization_api_key(
+            organization_id=organization_id
+        )
+    except OrganizationNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ProvisioningConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    return PlatformAPIKeyResponse(
+        id=api_key.id,
+        organization_id=api_key.organization_id,
+        name=api_key.name,
+        key_prefix=api_key.key_prefix,
+        api_key=raw_key,
+        created_at=api_key.created_at,
+        replaced_key_ids=archived_ids,
+        rotated=bool(archived_ids),
     )

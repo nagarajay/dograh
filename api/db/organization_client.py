@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import exists, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.future import select
 
@@ -217,6 +218,43 @@ class OrganizationClient(BaseDBClient):
 
                 await session.refresh(organization)
                 return organization, was_created
+            return organization, False
+
+    async def get_or_create_organization_for_external_reference(
+        self,
+        *,
+        org_provider_id: str,
+        user_id: int,
+        display_name: str | None,
+        external_reference: str,
+    ) -> tuple[OrganizationModel, bool]:
+        """Create the organization a provisioning system knows by its own id.
+
+        ``external_reference`` carries a partial unique index, which
+        ``get_or_create_organization_by_provider_id`` does not conflict-handle:
+        its ``ON CONFLICT DO NOTHING`` names ``provider_id`` alone, so two
+        concurrent first-provisions of one client raise a unique violation
+        instead of one of them losing quietly.
+
+        The loser re-reads and returns the winner with ``was_created=False``,
+        which is the same answer an ordinary retry gets. Keeping this here
+        rather than in the calling service is what keeps SQLAlchemy's exception
+        types inside ``api/db``.
+        """
+        try:
+            return await self.get_or_create_organization_by_provider_id(
+                org_provider_id=org_provider_id,
+                user_id=user_id,
+                display_name=display_name,
+                external_reference=external_reference,
+            )
+        except IntegrityError:
+            organization = await self.get_organization_by_external_reference(
+                external_reference
+            )
+            if organization is None:
+                # The violation was something other than the reference index.
+                raise
             return organization, False
 
     async def get_organization_by_external_reference(

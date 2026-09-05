@@ -208,6 +208,22 @@ class APIKeyModel(Base):
         Index("ix_api_keys_organization_id", "organization_id"),
         Index("ix_api_keys_key_hash", "key_hash"),
         Index("ix_api_keys_active", "is_active"),
+        # At most one *active* platform-provisioning key per organization. The
+        # name is reserved (api.constants.PLATFORM_PROVISIONING_API_KEY_NAME)
+        # and the endpoint that mints it replaces rather than appends, so this
+        # is what makes two concurrent retries collapse to one live credential
+        # instead of two. Partial on all three predicates: ordinary keys share
+        # names freely ("Default API Key" exists in every organization), and an
+        # archived key keeps its name forever.
+        Index(
+            "uq_api_keys_active_platform_provisioning",
+            "organization_id",
+            unique=True,
+            postgresql_where=text(
+                "name = 'platform-provisioning' AND is_active "
+                "AND archived_at IS NULL"
+            ),
+        ),
     )
 
 

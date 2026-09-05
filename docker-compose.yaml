@@ -150,6 +150,11 @@ services:
       # Set to "false" in .env to disable public signup (invite-only installs).
       ENABLE_SIGNUP: "${ENABLE_SIGNUP:-true}"
 
+      # Credential for the platform provisioning endpoints, presented as the
+      # X-Platform-Admin-Key header. Empty means they return 503, so disabling
+      # signup above does not also make tenants uncreatable.
+      PLATFORM_ADMIN_API_KEY: "${PLATFORM_ADMIN_API_KEY:-}"
+
       # Public origin for this deployment. The API derives BACKEND_API_ENDPOINT,
       # MINIO_PUBLIC_ENDPOINT and TURN_HOST from PUBLIC_BASE_URL / PUBLIC_HOST when
       # they are not set explicitly (see api/constants.py), so a standard remote
@@ -164,7 +169,15 @@ services:
       BACKEND_API_ENDPOINT: "${BACKEND_API_ENDPOINT:-}"
 
       # Database configuration (using containerized postgres)
-      DATABASE_URL: "postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres"
+      # DATABASE_URL: "postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres"
+      DATABASE_URL: "${DATABASE_URL}"
+
+      # Read only by scripts/reset_app_data.py, which refuses to touch a
+      # database unless DOGRAH_ENV is "development" and the Supabase project
+      # reference in DATABASE_URL matches DOGRAH_SUPABASE_PROJECT_REF. Unset
+      # here means the reset aborts, which is the safe direction.
+      DOGRAH_ENV: "${DOGRAH_ENV:-}"
+      DOGRAH_SUPABASE_PROJECT_REF: "${DOGRAH_SUPABASE_PROJECT_REF:-}"
 
       # Redis configuration (using containerized redis)
       REDIS_URL: "redis://:${REDIS_PASSWORD:-redissecret}@redis:6379"

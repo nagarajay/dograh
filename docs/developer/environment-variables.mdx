@@ -42,9 +42,14 @@ The relevant required variables for each mode are noted in the descriptions belo
 | `OSS_JWT_SECRET` | N/A | **Required for OSS deployments.** Secret used to sign JWT tokens. Must be set to a strong random value in production |
 | `OSS_JWT_EXPIRY_HOURS` | `720` | JWT token lifetime in hours (default: 30 days) |
 | `ENABLE_SIGNUP` | `true` | Set to `false` to disable public signup on invite-only installs — `POST /api/v1/auth/signup` returns 403 and the login page hides the Sign up link |
+| `PLATFORM_ADMIN_API_KEY` | unset | Server-to-server credential for the platform provisioning endpoints (`POST /api/v1/superuser/organizations` and `POST /api/v1/superuser/organizations/{id}/api-keys`), presented as the `X-Platform-Admin-Key` header. Unset — or shorter than 32 characters — leaves both endpoints returning 503, so an install that never provisions from outside is closed by default. This is how an invite-only install creates tenants with `ENABLE_SIGNUP=false` |
 
 <Warning>
 Never use the placeholder `OSS_JWT_SECRET` in a production deployment. Generate a strong random secret and store it securely.
+</Warning>
+
+<Warning>
+`PLATFORM_ADMIN_API_KEY` creates organizations and mints API keys for any tenant. Treat it like a root credential: generate it with `openssl rand -hex 32`, give it only to the provisioning system, and never reuse an organization API key or a super-admin password for it. Organization API keys are rejected on those endpoints outright.
 </Warning>
 
 ---

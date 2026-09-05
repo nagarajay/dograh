@@ -79,6 +79,26 @@ DOGRAH_MPS_SECRET_KEY = os.getenv("DOGRAH_MPS_SECRET_KEY", None)
 MPS_API_URL = os.getenv("MPS_API_URL", "https://services.dograh.com")
 DOGRAH_DEVOPS_SECRET = os.getenv("DOGRAH_DEVOPS_SECRET") or None
 
+# Server-to-server credential for platform provisioning (POST /superuser/...).
+# Deliberately its own secret rather than an organization API key or a
+# super-admin session: the caller is a machine that must reach across every
+# tenant, and organization API keys are tenant-scoped by construction while
+# super-admin auth is interactive. Unset means the provisioning endpoints are
+# unavailable, which is the safe direction for a deployment that never
+# provisions from outside.
+PLATFORM_ADMIN_API_KEY = os.getenv("PLATFORM_ADMIN_API_KEY") or None
+
+# A short shared secret is brute-forceable over HTTP, and this one mints
+# organizations. A configured key below this length is treated as no key at all.
+PLATFORM_ADMIN_API_KEY_MIN_LENGTH = 32
+
+# Reserved name of the organization API key the platform mints for its
+# provisioning system. Deterministic on purpose: it is what lets a retry
+# *replace* the previous key instead of adding another live one nobody holds.
+# Mirrored by the partial unique index uq_api_keys_active_platform_provisioning
+# and by migration b4d9e2f70a15 -- change all three together or not at all.
+PLATFORM_PROVISIONING_API_KEY_NAME = "platform-provisioning"
+
 # Storage Configuration
 ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
 

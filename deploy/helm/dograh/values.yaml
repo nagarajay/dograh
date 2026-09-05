@@ -150,6 +150,14 @@ secrets:
   # TURN REST API shared secret (matches coturn.staticAuthSecret below).
   turnSecret: ""
 
+  # Server-to-server credential for the platform provisioning endpoints
+  # (POST /api/v1/superuser/organizations and .../api-keys), presented as the
+  # X-Platform-Admin-Key header. Empty leaves those endpoints unavailable
+  # (503), which is what an install that never provisions from outside wants.
+  # Must be at least 32 characters. With secrets.existingSecret, put it under
+  # the PLATFORM_ADMIN_API_KEY key there.
+  platformAdminApiKey: ""
+
   # Shared secret gating the ops health endpoints (/api/v1/health/active-calls,
   # /api/v1/health/autoscale-metric). REQUIRED when autoscaling.web.keda.enabled —
   # KEDA presents it as X-Dograh-Devops-Secret to scrape the metric. When using
