@@ -4625,6 +4625,125 @@ export type PhoneNumberUpdateRequest = {
 };
 
 /**
+ * PlatformAPIKeyResponse
+ *
+ * The raw key appears here and nowhere else, ever.
+ *
+ * Only the hash is stored. A caller that loses this response can safely mint
+ * again: the endpoint replaces rather than appends, so retrying costs the
+ * previous key its validity and nothing else.
+ *
+ * There is no request body. The key's name is reserved and deterministic --
+ * that is precisely what a retry needs in order to find and replace the
+ * previous key rather than add another one beside it.
+ */
+export type PlatformApiKeyResponse = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Organization Id
+     */
+    organization_id: number;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Key Prefix
+     */
+    key_prefix: string;
+    /**
+     * Api Key
+     */
+    api_key: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Replaced Key Ids
+     */
+    replaced_key_ids: Array<number>;
+    /**
+     * Rotated
+     */
+    rotated: boolean;
+};
+
+/**
+ * PlatformOrganizationRequest
+ *
+ * Everything the platform must supply to create one client tenant.
+ *
+ * Notably absent: a password. The service account's credential is generated
+ * inside Dograh, hashed, and discarded, so the provisioning system never
+ * holds a password it would have to vault, rotate, or leak. What it holds
+ * afterwards is the organization API key minted by the endpoint below.
+ */
+export type PlatformOrganizationRequest = {
+    /**
+     * Display Name
+     */
+    display_name: string;
+    /**
+     * External Reference
+     *
+     * The provisioning system's own identifier for this client. Unique across organizations, and the key this endpoint is idempotent on.
+     */
+    external_reference: string;
+    /**
+     * Service Email
+     *
+     * Address of the service identity that will own the tenant.
+     */
+    service_email: string;
+};
+
+/**
+ * PlatformOrganizationResponse
+ */
+export type PlatformOrganizationResponse = {
+    /**
+     * Organization Id
+     */
+    organization_id: number;
+    /**
+     * Organization Provider Id
+     */
+    organization_provider_id: string;
+    /**
+     * Display Name
+     */
+    display_name: string | null;
+    /**
+     * External Reference
+     */
+    external_reference: string | null;
+    /**
+     * Service User Id
+     */
+    service_user_id: number;
+    /**
+     * Service User Email
+     */
+    service_user_email: string | null;
+    /**
+     * Service User Provider Id
+     */
+    service_user_provider_id: string;
+    /**
+     * Created
+     */
+    created: boolean;
+    /**
+     * Bootstrapped
+     */
+    bootstrapped: boolean;
+};
+
+/**
  * PlivoConfigurationRequest
  *
  * Request schema for Plivo configuration.
@@ -6090,9 +6209,15 @@ export type SuperuserOrganizationOperationalState = {
  *
  * One organization as it appears in the super-admin organization list.
  *
- * Identity is the Dograh organization id plus the auth provider's id. No
- * display name is resolved: names live in the auth provider, not in Dograh,
- * and fetching them would mean an outbound call per row.
+ * Every row is a client tenant: one Dograh organization per AVSIQ client, and
+ * no platform-internal organizations exist to filter out. A database with no
+ * clients provisioned therefore lists nothing at all.
+ *
+ * ``display_name`` and ``external_reference`` are Dograh's own columns,
+ * recorded when the client is provisioned. Both are nullable and are returned
+ * verbatim, including as ``None``: an organization whose identity was never
+ * recorded is unnamed, and presenting it as a client called something would
+ * hide the omission rather than surface it.
  */
 export type SuperuserOrganizationSummary = {
     /**
@@ -6272,6 +6397,10 @@ export type SuperuserTestRunResponse = {
      */
     is_superadmin_test: boolean;
     /**
+     * Superadmin Initiated By User Id
+     */
+    superadmin_initiated_by_user_id: number | null;
+    /**
      * Created At
      */
     created_at: string;
@@ -6398,6 +6527,14 @@ export type SuperuserWorkflowRunResponse = {
      * Created At
      */
     created_at: string;
+    /**
+     * Is Superadmin Test
+     */
+    is_superadmin_test?: boolean;
+    /**
+     * Superadmin Initiated By User Id
+     */
+    superadmin_initiated_by_user_id?: number | null;
 };
 
 /**
@@ -9305,6 +9442,45 @@ export type ListOrganizationsApiV1SuperuserOrganizationsGetResponses = {
 
 export type ListOrganizationsApiV1SuperuserOrganizationsGetResponse = ListOrganizationsApiV1SuperuserOrganizationsGetResponses[keyof ListOrganizationsApiV1SuperuserOrganizationsGetResponses];
 
+export type ProvisionOrganizationApiV1SuperuserOrganizationsPostData = {
+    body: PlatformOrganizationRequest;
+    headers?: {
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/superuser/organizations';
+};
+
+export type ProvisionOrganizationApiV1SuperuserOrganizationsPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ProvisionOrganizationApiV1SuperuserOrganizationsPostError = ProvisionOrganizationApiV1SuperuserOrganizationsPostErrors[keyof ProvisionOrganizationApiV1SuperuserOrganizationsPostErrors];
+
+export type ProvisionOrganizationApiV1SuperuserOrganizationsPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: PlatformOrganizationResponse;
+};
+
+export type ProvisionOrganizationApiV1SuperuserOrganizationsPostResponse = ProvisionOrganizationApiV1SuperuserOrganizationsPostResponses[keyof ProvisionOrganizationApiV1SuperuserOrganizationsPostResponses];
+
 export type GetOrganizationApiV1SuperuserOrganizationsOrganizationIdGetData = {
     body?: never;
     headers?: {
@@ -9612,6 +9788,50 @@ export type GetWorkflowRunsApiV1SuperuserWorkflowRunsGetResponses = {
 };
 
 export type GetWorkflowRunsApiV1SuperuserWorkflowRunsGetResponse = GetWorkflowRunsApiV1SuperuserWorkflowRunsGetResponses[keyof GetWorkflowRunsApiV1SuperuserWorkflowRunsGetResponses];
+
+export type MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Organization Id
+         */
+        organization_id: number;
+    };
+    query?: never;
+    url: '/api/v1/superuser/organizations/{organization_id}/api-keys';
+};
+
+export type MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostError = MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostErrors[keyof MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostErrors];
+
+export type MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: PlatformApiKeyResponse;
+};
+
+export type MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostResponse = MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostResponses[keyof MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostResponses];
 
 export type ValidateWorkflowApiV1WorkflowWorkflowIdValidatePostData = {
     body?: never;
