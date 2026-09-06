@@ -795,6 +795,26 @@ export type CallDispositionCodes = {
 };
 
 /**
+ * CallDispositionOption
+ *
+ * One business outcome the terminal classifier may select.
+ */
+export type CallDispositionOption = {
+    /**
+     * Code
+     *
+     * Stable code recorded when this outcome is selected.
+     */
+    code: string;
+    /**
+     * Description
+     *
+     * Business criteria for selecting this disposition.
+     */
+    description: string;
+};
+
+/**
  * CallType
  */
 export type CallType = 'inbound' | 'outbound';
@@ -1960,6 +1980,12 @@ export type DefaultConfigurationsResponse = {
         [key: string]: string;
     };
     workflow_configurations: WorkflowConfigurationDefaults;
+    /**
+     * Default Call Dispositions
+     *
+     * Built-in suggestions for call-disposition extraction. They do not enable extraction until saved in workflow_configurations.call_dispositions.
+     */
+    default_call_dispositions: Array<CallDispositionOption>;
     text_chat_inactivity_timeout_constraints: TextChatInactivityTimeoutConstraints;
     widget_text_defaults: WidgetTexts;
 };
@@ -2012,6 +2038,12 @@ export type DispositionCodesResponse = {
      * Disposition codes defined by Pipecat's EndTaskReason enum.
      */
     end_task_reason_codes: Array<string>;
+    /**
+     * System Codes
+     *
+     * Only the platform's built-in dispositions, without the custom codes this organization's runs have produced. This is the set a disposition mapping translates *from*, so the mapping editor seeds its rows here: `codes` also contains mapped codes, which are the targets of a mapping rather than its sources.
+     */
+    system_codes: Array<string>;
 };
 
 /**
@@ -3477,6 +3509,10 @@ export type LangfuseCredentialsRequest = {
      * Project Id
      */
     project_id: string;
+    /**
+     * Traces Public
+     */
+    traces_public?: boolean;
 };
 
 /**
@@ -3499,6 +3535,10 @@ export type LangfuseCredentialsResponse = {
      * Project Id
      */
     project_id?: string;
+    /**
+     * Traces Public
+     */
+    traces_public?: boolean;
     /**
      * Configured
      */
@@ -4402,6 +4442,18 @@ export type OrganizationPreferences = {
      * External Pbx Integrations Enabled
      */
     external_pbx_integrations_enabled?: boolean;
+    /**
+     * Disposition Mapping Enabled
+     */
+    disposition_mapping_enabled?: boolean;
+    /**
+     * Disposition Mapping
+     *
+     * Dograh disposition -> the code this organization uses for it. Applied when writing `gathered_context.mapped_call_disposition`, so webhooks, run filters, reports and external-PBX write-backs all read the organization's own vocabulary. Dispositions absent from the mapping pass through unchanged.
+     */
+    disposition_mapping?: {
+        [key: string]: string;
+    };
 };
 
 /**
@@ -7060,6 +7112,12 @@ export type TransferCallConfig = {
      */
     timeout?: number;
     /**
+     * Call Disposition
+     *
+     * Optional disposition to record after a successful transfer. When omitted, Dograh records its provider-specific transfer default.
+     */
+    call_disposition?: string | null;
+    /**
      * Parameters
      *
      * Parameters the model may provide when calling this transfer tool, for example state, department, or transfer reason.
@@ -7841,6 +7899,18 @@ export type WidgetTexts = {
      */
     endChatText?: string;
     /**
+     * Endchatconfirmtext
+     */
+    endChatConfirmText?: string;
+    /**
+     * Endchatcanceltext
+     */
+    endChatCancelText?: string;
+    /**
+     * Endingchattext
+     */
+    endingChatText?: string;
+    /**
      * Conversationendedtext
      */
     conversationEndedText?: string;
@@ -7959,6 +8029,12 @@ export type WorkflowConfigurationDefaults = {
      * Context Compaction Enabled
      */
     context_compaction_enabled?: boolean;
+    /**
+     * Call Dispositions
+     *
+     * Allowed business outcomes for terminal call classification. Each entry defines the exact stored code and the criteria for selecting it.
+     */
+    call_dispositions?: Array<CallDispositionOption>;
     /**
      * Text Chat Inactivity Timeout Seconds
      */

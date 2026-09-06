@@ -575,6 +575,15 @@ class DispositionCodesResponse(BaseModel):
     end_task_reason_codes: List[str] = Field(
         description="Disposition codes defined by Pipecat's EndTaskReason enum."
     )
+    system_codes: List[str] = Field(
+        description=(
+            "Only the platform's built-in dispositions, without the custom "
+            "codes this organization's runs have produced. This is the set a "
+            "disposition mapping translates *from*, so the mapping editor seeds "
+            "its rows here: `codes` also contains mapped codes, which are the "
+            "targets of a mapping rather than its sources."
+        )
+    )
 
 
 @router.get("/disposition-codes", response_model=DispositionCodesResponse)
@@ -597,6 +606,7 @@ async def get_disposition_codes(
             *sorted(code for code in custom_codes if code not in known),
         ],
         end_task_reason_codes=list(END_TASK_REASON_DISPOSITION_CODES),
+        system_codes=list(SYSTEM_DISPOSITION_CODES),
     )
 
 
@@ -1662,6 +1672,9 @@ class LangfuseCredentialsRequest(BaseModel):
     # Required: Langfuse v4 trace links are project-scoped, and the legacy
     # /trace/<id> form 404s without it.
     project_id: str = Field(min_length=1)
+    # Off unless the org asks for it: a public trace is readable by anyone
+    # holding its URL, with no Langfuse login.
+    traces_public: bool = False
 
 
 class LangfuseCredentialsResponse(BaseModel):
@@ -1669,6 +1682,7 @@ class LangfuseCredentialsResponse(BaseModel):
     public_key: str = ""
     secret_key: str = ""
     project_id: str = ""
+    traces_public: bool = False
     configured: bool = False
 
 
@@ -1693,6 +1707,7 @@ async def get_langfuse_credentials(
         public_key=mask_key(config.value.get("public_key", "")),
         secret_key=mask_key(config.value.get("secret_key", "")),
         project_id=config.value.get("project_id", ""),
+        traces_public=bool(config.value.get("traces_public", False)),
         configured=True,
     )
 
@@ -1716,6 +1731,7 @@ async def save_langfuse_credentials(
         "public_key": request.public_key,
         "secret_key": request.secret_key,
         "project_id": request.project_id.strip(),
+        "traces_public": request.traces_public,
     }
 
     # Preserve masked fields
