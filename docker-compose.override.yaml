@@ -1,0 +1,18 @@
+# Local development override: build api and ui from this checkout instead of
+# pulling prebuilt images. Mirrors the override setup_remote.sh generates in
+# build mode, but keeps the ${REGISTRY} image names from docker-compose.yaml so
+# the rest of the stack is unaffected. Remove this file to revert to pulling.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: ${REGISTRY:-dograhai}/dograh-api:latest
+    pull_policy: never
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    image: ${REGISTRY:-dograhai}/dograh-ui:latest
+    pull_policy: never

@@ -1,13 +1,15 @@
 "use client";
 
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { SuperadminBreadcrumbs } from "@/app/superadmin/components/SuperadminBreadcrumbs";
+import { SuperadminRunsPanel } from "@/app/superadmin/components/SuperadminRunsPanel";
+import { superadminRunsHref } from "@/app/superadmin/lib/runLinks";
 import { inspectOrganizationWorkflowApiV1SuperuserOrganizationsOrganizationIdWorkflowsWorkflowIdInspectionGet } from "@/client/sdk.gen";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
     Table,
@@ -21,17 +23,14 @@ import { detailFromError } from "@/lib/apiError";
 import { useAuth } from "@/lib/auth";
 import { formatDateTime } from "@/lib/dateTime";
 
+import type {
+    InspectedDocument,
+    InspectedEdge,
+    InspectedNode,
+    InspectedTool,
+} from "./agentFlow";
+import { AgentWorkflowGraph } from "./AgentWorkflowGraph";
 import { SuperadminAgentTest } from "./SuperadminAgentTest";
-
-interface InspectedNode {
-    id: string;
-    type?: string | null;
-    name?: string | null;
-    narrative: Record<string, unknown>;
-    tool_uuids: string[];
-    document_uuids: string[];
-    mcp_tool_filters?: Record<string, unknown> | null;
-}
 
 interface Inspection {
     workflow: {
@@ -53,28 +52,9 @@ interface Inspection {
     has_unpublished_draft: boolean;
     global_prompt?: string | null;
     nodes: InspectedNode[];
-    edges: Array<{
-        source?: string | null;
-        target?: string | null;
-        label?: string | null;
-        condition?: string | null;
-    }>;
-    tools: Array<{
-        tool_uuid: string;
-        name?: string | null;
-        description?: string | null;
-        category?: string | null;
-        status?: string | null;
-        resolved: boolean;
-    }>;
-    documents: Array<{
-        document_uuid: string;
-        filename?: string | null;
-        retrieval_mode?: string | null;
-        processing_status?: string | null;
-        total_chunks?: number | null;
-        resolved: boolean;
-    }>;
+    edges: InspectedEdge[];
+    tools: InspectedTool[];
+    documents: InspectedDocument[];
     model_configuration: Record<string, unknown>;
     workflow_configurations: Record<string, unknown>;
     template_context_variables: Record<string, unknown>;
@@ -197,12 +177,16 @@ export default function SuperadminAgentInspectionPage() {
 
     return (
         <div className="container mx-auto space-y-4 px-4 py-6">
-            <Button variant="ghost" size="sm" asChild>
-                <Link href={`/superadmin/organizations/${inspection.organization_id}`}>
-                    <ArrowLeft className="mr-2 h-4 w-4" />
-                    Organization {inspection.organization_id}
-                </Link>
-            </Button>
+            <SuperadminBreadcrumbs
+                items={[
+                    { label: "Organizations", href: "/superadmin/organizations" },
+                    {
+                        label: `Organization ${inspection.organization_id}`,
+                        href: `/superadmin/organizations/${inspection.organization_id}`,
+                    },
+                    { label: workflow.name },
+                ]}
+            />
 
             <Card>
                 <CardHeader>
@@ -248,7 +232,10 @@ export default function SuperadminAgentInspectionPage() {
                         <p className="text-xs text-muted-foreground">Runs</p>
                         <p className="text-sm">
                             <Link
-                                href={`/superadmin/runs?organization_id=${inspection.organization_id}`}
+                                href={superadminRunsHref({
+                                    organizationId: inspection.organization_id,
+                                    workflowId: workflow.id,
+                                })}
                                 className="underline-offset-2 hover:underline"
                             >
                                 {workflow.total_runs}
@@ -257,6 +244,22 @@ export default function SuperadminAgentInspectionPage() {
                     </div>
                 </CardContent>
             </Card>
+
+            <AgentWorkflowGraph
+                nodes={inspection.nodes}
+                edges={inspection.edges}
+                tools={inspection.tools}
+                documents={inspection.documents}
+                inspectedSource={inspection.inspected_source}
+            />
+
+            <SuperadminRunsPanel
+                organizationId={inspection.organization_id}
+                workflowId={workflow.id}
+                showAgentColumn={false}
+                title="Runs / call logs"
+                description={`Most recent runs of ${workflow.name}.`}
+            />
 
             <SuperadminAgentTest
                 organizationId={inspection.organization_id}

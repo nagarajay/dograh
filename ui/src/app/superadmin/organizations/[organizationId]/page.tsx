@@ -1,10 +1,13 @@
 "use client";
 
-import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { SuperadminBreadcrumbs } from "@/app/superadmin/components/SuperadminBreadcrumbs";
+import { SuperadminRunsPanel } from "@/app/superadmin/components/SuperadminRunsPanel";
+import { superadminRunsHref } from "@/app/superadmin/lib/runLinks";
 import {
     getOrganizationApiV1SuperuserOrganizationsOrganizationIdGet,
     listOrganizationWorkflowsApiV1SuperuserOrganizationsOrganizationIdWorkflowsGet,
@@ -20,6 +23,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { detailFromError } from "@/lib/apiError";
 import { useAuth } from "@/lib/auth";
 import { formatDateTime } from "@/lib/dateTime";
@@ -158,17 +162,18 @@ export default function SuperadminOrganizationDetailPage() {
         label: state.bootstrap_state,
         tone: "warn" as const,
     };
+    // An organization with no display name is unnamed; it is identified by its
+    // provider id rather than given an invented name.
+    const organizationLabel = organization.display_name || organization.provider_id;
 
     return (
         <div className="container mx-auto space-y-4 px-4 py-6">
-            <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" asChild>
-                    <Link href="/superadmin/organizations">
-                        <ArrowLeft className="mr-2 h-4 w-4" />
-                        Organizations
-                    </Link>
-                </Button>
-            </div>
+            <SuperadminBreadcrumbs
+                items={[
+                    { label: "Organizations", href: "/superadmin/organizations" },
+                    { label: organizationLabel },
+                ]}
+            />
 
             <Card>
                 <CardHeader>
@@ -212,189 +217,257 @@ export default function SuperadminOrganizationDetailPage() {
                 </CardContent>
             </Card>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle>Provisioning state</CardTitle>
-                    <CardDescription>
-                        Derived from Dograh configuration. No credentials or secret values are read
-                        into this view.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="grid gap-4 md:grid-cols-4">
-                        <div>
-                            <p className="text-xs text-muted-foreground">Bootstrap</p>
-                            <Badge
-                                variant={bootstrap.tone === "ok" ? "default" : "destructive"}
-                                className="mt-1"
-                            >
-                                {bootstrap.label}
-                            </Badge>
-                            {state.bootstrap_updated_at && (
-                                <p className="mt-1 text-xs text-muted-foreground">
-                                    {formatDateTime(state.bootstrap_updated_at)}
-                                </p>
-                            )}
-                        </div>
-                        <div>
-                            <p className="text-xs text-muted-foreground">Model configuration</p>
-                            <div className="mt-1 flex items-center gap-2 text-sm">
-                                <StateIcon ok={state.model_configuration_present} />
-                                {state.model_configuration_present ? "Configured" : "Missing"}
-                            </div>
-                            {state.model_configuration_last_validated_at && (
-                                <p className="mt-1 text-xs text-muted-foreground">
-                                    Validated {formatDateTime(state.model_configuration_last_validated_at)}
-                                </p>
-                            )}
-                        </div>
-                        <div>
-                            <p className="text-xs text-muted-foreground">Langfuse tracing</p>
-                            <div className="mt-1 flex items-center gap-2 text-sm">
-                                <StateIcon ok={state.langfuse_configured} />
-                                {state.langfuse_configured ? "Configured" : "Not configured"}
-                            </div>
-                        </div>
-                        <div>
-                            <p className="text-xs text-muted-foreground">Active API keys</p>
-                            <p className="text-lg font-medium">{state.active_api_key_count}</p>
-                        </div>
-                    </div>
+            {/* Everything a super admin needs about one client, grouped the way
+                the client is structured: its agents, the runs those agents
+                produced, the telephony it dials through, and who belongs to it.
+                Every tab is fetched with this organization's id and nothing
+                wider. Campaigns and usage are absent on purpose — see the
+                deferral note in the milestone report: both would need a new
+                super-admin endpoint, as today's campaign and usage routes scope
+                to the caller's own organization. */}
+            <Tabs defaultValue="overview" className="space-y-4">
+                <TabsList>
+                    <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="agents">
+                        Agents ({organization.workflow_count})
+                    </TabsTrigger>
+                    <TabsTrigger value="runs">
+                        Runs ({organization.run_count})
+                    </TabsTrigger>
+                    <TabsTrigger value="telephony">
+                        Telephony ({state.telephony_configurations.length})
+                    </TabsTrigger>
+                    <TabsTrigger value="members">
+                        Members ({users.length})
+                    </TabsTrigger>
+                </TabsList>
 
-                    <div>
-                        <p className="mb-2 text-sm font-medium">Telephony</p>
-                        {state.telephony_configurations.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">
-                                No telephony configuration.
-                            </p>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Name</TableHead>
-                                            <TableHead>Provider</TableHead>
-                                            <TableHead>State</TableHead>
-                                            <TableHead className="text-right">Numbers</TableHead>
-                                            <TableHead>Default outbound</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {state.telephony_configurations.map((configuration) => (
-                                            <TableRow key={configuration.id}>
-                                                <TableCell>{configuration.name}</TableCell>
-                                                <TableCell>{configuration.provider}</TableCell>
-                                                <TableCell>
-                                                    {configuration.inactive ? (
-                                                        <span className="flex items-center gap-2 text-sm text-destructive">
-                                                            <AlertTriangle className="h-4 w-4" />
-                                                            {configuration.inactive_reason || "Inactive"}
-                                                        </span>
-                                                    ) : (
-                                                        <span className="text-sm">Active</span>
-                                                    )}
-                                                </TableCell>
-                                                <TableCell className="text-right">
-                                                    {configuration.phone_number_count}
-                                                </TableCell>
-                                                <TableCell>
-                                                    {configuration.is_default_outbound ? "Yes" : "No"}
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
+                <TabsContent value="overview" className="space-y-4">
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Provisioning state</CardTitle>
+                        <CardDescription>
+                            Derived from Dograh configuration. No credentials or secret values are read
+                            into this view.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="grid gap-4 md:grid-cols-4">
+                            <div>
+                                <p className="text-xs text-muted-foreground">Bootstrap</p>
+                                <Badge
+                                    variant={bootstrap.tone === "ok" ? "default" : "destructive"}
+                                    className="mt-1"
+                                >
+                                    {bootstrap.label}
+                                </Badge>
+                                {state.bootstrap_updated_at && (
+                                    <p className="mt-1 text-xs text-muted-foreground">
+                                        {formatDateTime(state.bootstrap_updated_at)}
+                                    </p>
+                                )}
                             </div>
-                        )}
-                    </div>
-                </CardContent>
-            </Card>
+                            <div>
+                                <p className="text-xs text-muted-foreground">Model configuration</p>
+                                <div className="mt-1 flex items-center gap-2 text-sm">
+                                    <StateIcon ok={state.model_configuration_present} />
+                                    {state.model_configuration_present ? "Configured" : "Missing"}
+                                </div>
+                                {state.model_configuration_last_validated_at && (
+                                    <p className="mt-1 text-xs text-muted-foreground">
+                                        Validated {formatDateTime(state.model_configuration_last_validated_at)}
+                                    </p>
+                                )}
+                            </div>
+                            <div>
+                                <p className="text-xs text-muted-foreground">Langfuse tracing</p>
+                                <div className="mt-1 flex items-center gap-2 text-sm">
+                                    <StateIcon ok={state.langfuse_configured} />
+                                    {state.langfuse_configured ? "Configured" : "Not configured"}
+                                </div>
+                            </div>
+                            <div>
+                                <p className="text-xs text-muted-foreground">Active API keys</p>
+                                <p className="text-lg font-medium">{state.active_api_key_count}</p>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
 
-            <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
-                    <div>
-                        <CardTitle>Agents</CardTitle>
-                        <CardDescription>Workflows owned by this organization.</CardDescription>
-                    </div>
-                    <Button variant="outline" size="sm" asChild>
-                        <Link href={`/superadmin/runs?organization_id=${organization.id}`}>
-                            View runs
-                        </Link>
-                    </Button>
-                </CardHeader>
-                <CardContent className="overflow-x-auto">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>ID</TableHead>
-                                <TableHead>Name</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Published</TableHead>
-                                <TableHead className="text-right">Runs</TableHead>
-                                <TableHead>Created</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {workflows.length === 0 && (
+                </TabsContent>
+
+                <TabsContent value="agents" className="space-y-4">
+                <Card>
+                    <CardHeader className="flex flex-row items-center justify-between">
+                        <div>
+                            <CardTitle>Agents</CardTitle>
+                            <CardDescription>Workflows owned by this organization.</CardDescription>
+                        </div>
+                        <Button variant="outline" size="sm" asChild>
+                            <Link href={superadminRunsHref({ organizationId: organization.id })}>
+                                View runs
+                            </Link>
+                        </Button>
+                    </CardHeader>
+                    <CardContent className="overflow-x-auto">
+                        <Table>
+                            <TableHeader>
                                 <TableRow>
-                                    <TableCell colSpan={6} className="text-center text-muted-foreground">
-                                        This organization has no agents.
-                                    </TableCell>
+                                    <TableHead>ID</TableHead>
+                                    <TableHead>Name</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead>Published</TableHead>
+                                    <TableHead className="text-right">Runs</TableHead>
+                                    <TableHead>Created</TableHead>
                                 </TableRow>
-                            )}
-                            {workflows.map((workflow) => (
-                                <TableRow key={workflow.id}>
-                                    <TableCell>
-                                        <Link
-                                            href={`/superadmin/organizations/${organization.id}/workflows/${workflow.id}`}
-                                            className="font-medium underline-offset-2 hover:underline"
-                                        >
-                                            {workflow.id}
-                                        </Link>
-                                    </TableCell>
-                                    <TableCell>{workflow.name}</TableCell>
-                                    <TableCell>{workflow.status}</TableCell>
-                                    <TableCell>{workflow.is_published ? "Yes" : "Draft only"}</TableCell>
-                                    <TableCell className="text-right">{workflow.total_runs}</TableCell>
-                                    <TableCell>
-                                        {workflow.created_at ? formatDateTime(workflow.created_at) : "—"}
-                                    </TableCell>
-                                </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
-                </CardContent>
-            </Card>
+                            </TableHeader>
+                            <TableBody>
+                                {workflows.length === 0 && (
+                                    <TableRow>
+                                        <TableCell colSpan={6} className="text-center text-muted-foreground">
+                                            This organization has no agents.
+                                        </TableCell>
+                                    </TableRow>
+                                )}
+                                {workflows.map((workflow) => (
+                                    <TableRow key={workflow.id}>
+                                        <TableCell>
+                                            <Link
+                                                href={`/superadmin/organizations/${organization.id}/workflows/${workflow.id}`}
+                                                className="font-medium underline-offset-2 hover:underline"
+                                            >
+                                                {workflow.id}
+                                            </Link>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Link
+                                                href={`/superadmin/organizations/${organization.id}/workflows/${workflow.id}`}
+                                                className="underline-offset-2 hover:underline"
+                                            >
+                                                {workflow.name}
+                                            </Link>
+                                        </TableCell>
+                                        <TableCell>{workflow.status}</TableCell>
+                                        <TableCell>{workflow.is_published ? "Yes" : "Draft only"}</TableCell>
+                                        <TableCell className="text-right">
+                                            <Link
+                                                href={superadminRunsHref({
+                                                    organizationId: organization.id,
+                                                    workflowId: workflow.id,
+                                                })}
+                                                className="underline-offset-2 hover:underline"
+                                            >
+                                                {workflow.total_runs}
+                                            </Link>
+                                        </TableCell>
+                                        <TableCell>
+                                            {workflow.created_at ? formatDateTime(workflow.created_at) : "—"}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+                </TabsContent>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle>Members</CardTitle>
-                </CardHeader>
-                <CardContent className="overflow-x-auto">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>User ID</TableHead>
-                                <TableHead>Email</TableHead>
-                                <TableHead>Provider ID</TableHead>
-                                <TableHead>Superuser</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {users.map((member) => (
-                                <TableRow key={member.id}>
-                                    <TableCell>{member.id}</TableCell>
-                                    <TableCell>{member.email || "—"}</TableCell>
-                                    <TableCell className="font-mono text-xs">
-                                        {member.provider_id || "—"}
-                                    </TableCell>
-                                    <TableCell>{member.is_superuser ? "Yes" : "No"}</TableCell>
+                <TabsContent value="runs" className="space-y-4">
+                    <SuperadminRunsPanel
+                        organizationId={organization.id}
+                        description="Most recent runs across this organization's agents."
+                    />
+                </TabsContent>
+
+                <TabsContent value="telephony" className="space-y-4">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Telephony</CardTitle>
+                            <CardDescription>
+                                Operational state of this organization&apos;s providers and numbers.
+                                Credentials are not read into this view, and nothing here changes a
+                                configuration.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            {state.telephony_configurations.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">
+                                    No telephony configuration.
+                                </p>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead>Name</TableHead>
+                                                <TableHead>Provider</TableHead>
+                                                <TableHead>State</TableHead>
+                                                <TableHead className="text-right">Numbers</TableHead>
+                                                <TableHead>Default outbound</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {state.telephony_configurations.map((configuration) => (
+                                                <TableRow key={configuration.id}>
+                                                    <TableCell>{configuration.name}</TableCell>
+                                                    <TableCell>{configuration.provider}</TableCell>
+                                                    <TableCell>
+                                                        {configuration.inactive ? (
+                                                            <span className="flex items-center gap-2 text-sm text-destructive">
+                                                                <AlertTriangle className="h-4 w-4" />
+                                                                {configuration.inactive_reason || "Inactive"}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-sm">Active</span>
+                                                        )}
+                                                    </TableCell>
+                                                    <TableCell className="text-right">
+                                                        {configuration.phone_number_count}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        {configuration.is_default_outbound ? "Yes" : "No"}
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="members" className="space-y-4">
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Members</CardTitle>
+                    </CardHeader>
+                    <CardContent className="overflow-x-auto">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>User ID</TableHead>
+                                    <TableHead>Email</TableHead>
+                                    <TableHead>Provider ID</TableHead>
+                                    <TableHead>Superuser</TableHead>
                                 </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
-                </CardContent>
-            </Card>
+                            </TableHeader>
+                            <TableBody>
+                                {users.map((member) => (
+                                    <TableRow key={member.id}>
+                                        <TableCell>{member.id}</TableCell>
+                                        <TableCell>{member.email || "—"}</TableCell>
+                                        <TableCell className="font-mono text-xs">
+                                            {member.provider_id || "—"}
+                                        </TableCell>
+                                        <TableCell>{member.is_superuser ? "Yes" : "No"}</TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+                </TabsContent>
+            </Tabs>
         </div>
     );
 }

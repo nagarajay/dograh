@@ -154,6 +154,9 @@ export default function CustomEdge(props: CustomEdgeProps) {
 
     const { getEdges, setNodes } = useReactFlow<FlowNode, FlowEdge>();
     const { saveWorkflow } = useWorkflow();
+    // A read-only canvas has no write path, so the edge's edit and delete
+    // controls are not offered there.
+    const readOnly = useWorkflowOptional()?.readOnly ?? false;
     const updateEdge = useWorkflowStore((state) => state.updateEdge);
     const deleteEdge = useWorkflowStore((state) => state.deleteEdge);
     const [open, setOpen] = useState(false);
@@ -323,24 +326,26 @@ export default function CustomEdge(props: CustomEdgeProps) {
                                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                                     Condition
                                 </span>
-                                <div className="flex items-center gap-1">
-                                    <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-6 w-6 p-0 hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
-                                        onClick={handleDeleteEdge}
-                                    >
-                                        <Trash2 className="h-3 w-3" />
-                                    </Button>
-                                    <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-6 w-6 p-0 hover:bg-muted text-muted-foreground"
-                                        onClick={() => setOpen(true)}
-                                    >
-                                        <Pencil className="h-3 w-3" />
-                                    </Button>
-                                </div>
+                                {!readOnly && (
+                                    <div className="flex items-center gap-1">
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6 p-0 hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
+                                            onClick={handleDeleteEdge}
+                                        >
+                                            <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6 p-0 hover:bg-muted text-muted-foreground"
+                                            onClick={() => setOpen(true)}
+                                        >
+                                            <Pencil className="h-3 w-3" />
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
                             {/* Content */}
                             <div className="px-3 pb-3">

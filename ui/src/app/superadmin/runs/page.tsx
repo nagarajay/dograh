@@ -2,9 +2,11 @@
 
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CheckCircle, ChevronLeft, ChevronRight, ExternalLink, FileText, Info, Loader2, RefreshCw } from 'lucide-react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { SuperadminBreadcrumbs } from '@/app/superadmin/components/SuperadminBreadcrumbs';
 import { getWorkflowRunsApiV1SuperuserWorkflowRunsGet } from '@/client/sdk.gen';
 import { FilterBuilder } from "@/components/filters/FilterBuilder";
 import { MediaPreviewButton, MediaPreviewDialog } from '@/components/MediaPreviewDialog';
@@ -314,9 +316,28 @@ export default function RunsPage() {
 
     return (
         <div className="container mx-auto p-6 space-y-6 max-w-full">
+            {/* Arriving from an organization keeps the hierarchy visible:
+                Organizations → Organization → Runs. The scope itself is the
+                organization_id the endpoint filters on, not this crumb. */}
+            {organizationIdFilter !== undefined && (
+                <SuperadminBreadcrumbs
+                    items={[
+                        { label: "Organizations", href: "/superadmin/organizations" },
+                        {
+                            label: `Organization ${organizationIdFilter}`,
+                            href: `/superadmin/organizations/${organizationIdFilter}`,
+                        },
+                        { label: "Runs" },
+                    ]}
+                />
+            )}
             <div>
                 <h1 className="text-3xl font-bold mb-2">Workflow Runs</h1>
-                <p className="text-muted-foreground">View and manage all workflow runs across organizations</p>
+                <p className="text-muted-foreground">
+                    {organizationIdFilter !== undefined
+                        ? `Runs owned by organization ${organizationIdFilter}`
+                        : 'View and manage all workflow runs across organizations'}
+                </p>
             </div>
 
             {error && (
@@ -426,13 +447,28 @@ export default function RunsPage() {
                                                     </TableCell>
                                                     <TableCell>
                                                         <div className="flex flex-col">
-                                                            <span className="font-medium text-sm">
-                                                                {run.workflow_name ? (
-                                                                    run.workflow_name.length > 15
-                                                                        ? `${run.workflow_name.substring(0, 15)}...`
-                                                                        : run.workflow_name
-                                                                ) : 'Unknown Workflow'}
-                                                            </span>
+                                                            {/* Runs trace back to the agent they ran, inside the
+                                                                organization that owns it. */}
+                                                            {run.organization_id ? (
+                                                                <Link
+                                                                    href={`/superadmin/organizations/${run.organization_id}/workflows/${run.workflow_id}`}
+                                                                    className="font-medium text-sm underline-offset-2 hover:underline"
+                                                                >
+                                                                    {run.workflow_name ? (
+                                                                        run.workflow_name.length > 15
+                                                                            ? `${run.workflow_name.substring(0, 15)}...`
+                                                                            : run.workflow_name
+                                                                    ) : 'Unknown Workflow'}
+                                                                </Link>
+                                                            ) : (
+                                                                <span className="font-medium text-sm">
+                                                                    {run.workflow_name ? (
+                                                                        run.workflow_name.length > 15
+                                                                            ? `${run.workflow_name.substring(0, 15)}...`
+                                                                            : run.workflow_name
+                                                                    ) : 'Unknown Workflow'}
+                                                                </span>
+                                                            )}
                                                             <span className="text-xs text-muted-foreground font-mono">
                                                                 ID: {String(run.workflow_id).length > 12
                                                                     ? `${String(run.workflow_id).substring(0, 12)}...`

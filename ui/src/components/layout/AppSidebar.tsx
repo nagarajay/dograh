@@ -184,8 +184,11 @@ export function AppSidebar() {
     vonageMissingSignatureSecretCount > 0;
   const isCollapsed = !isMobile && state === "collapsed";
   const { isSuperuser } = useIsSuperuser();
+  // Super admins work top-down from a client organization, so the console sits
+  // above BUILD rather than at the bottom of the drawer. NAV_SECTIONS[0] is the
+  // unlabelled Overview section and stays first.
   const navSections = isSuperuser
-    ? [...NAV_SECTIONS, SUPERADMIN_SECTION]
+    ? [NAV_SECTIONS[0], SUPERADMIN_SECTION, ...NAV_SECTIONS.slice(1)]
     : NAV_SECTIONS;
 
   // Version info from app config context

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { useWorkflow } from "@/app/workflow/[workflowId]/contexts/WorkflowContext";
+import { useWorkflow, useWorkflowOptional } from "@/app/workflow/[workflowId]/contexts/WorkflowContext";
 import type { NodeSpec } from "@/client/types.gen";
 import { DocumentBadges } from "@/components/flow/DocumentBadges";
 import { NodeEditForm, useNodeSpecs } from "@/components/flow/renderer";
@@ -190,8 +190,8 @@ function CanvasPreview({
     data: FlowNodeData;
     onCopyTrigger: () => void;
     triggerCopied: boolean;
-    onStaleTools: (uuids: string[]) => void;
-    onStaleDocuments: (uuids: string[]) => void;
+    onStaleTools?: (uuids: string[]) => void;
+    onStaleDocuments?: (uuids: string[]) => void;
 }) {
     const { config: appConfig } = useAppConfig();
     if (spec.name === "trigger") {
@@ -492,6 +492,10 @@ export const GenericNode = memo(({ data, selected, id, type }: GenericNodeProps)
         additionalData,
     });
     const { saveWorkflow, tools, documents, recordings } = useWorkflow();
+    // Read-only canvases (historical versions, the super-admin agent view) have
+    // no write path, so they must not offer edit affordances and must not run
+    // the stale-reference cleanup below, which saves the workflow.
+    const readOnly = useWorkflowOptional()?.readOnly ?? false;
     const { bySpecName } = useNodeSpecs();
     const { config: appConfig } = useAppConfig();
     const spec = bySpecName.get(type);
@@ -650,13 +654,13 @@ export const GenericNode = memo(({ data, selected, id, type }: GenericNodeProps)
                         data={data}
                         onCopyTrigger={handleCopyTrigger}
                         triggerCopied={triggerCopied}
-                        onStaleTools={handleStaleTools}
-                        onStaleDocuments={handleStaleDocuments}
+                        onStaleTools={readOnly ? undefined : handleStaleTools}
+                        onStaleDocuments={readOnly ? undefined : handleStaleDocuments}
                     />
                 )}
             </NodeContent>
 
-            <NodeToolbar isVisible={selected} position={Position.Right}>
+            <NodeToolbar isVisible={selected && !readOnly} position={Position.Right}>
                 <div className="flex flex-col gap-1">
                     <Button onClick={() => setOpen(true)} variant="outline" size="icon">
                         <Edit />
