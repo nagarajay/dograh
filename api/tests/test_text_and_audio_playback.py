@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     Frame,
     LLMContextFrame,
     TTSAudioRawFrame,
@@ -533,6 +535,123 @@ class TestStartGreeting:
         queued_frame = llm.queue_frame.await_args.args[0]
         assert isinstance(queued_frame, LLMContextFrame)
         assert queued_frame.context is context
+
+
+    @pytest.mark.asyncio
+    async def test_start_greeting_bootstraps_llm_generation_after_playback(
+        self, text_workflow: WorkflowGraph
+    ):
+        """The start node's greeting must be followed by an LLM generation.
+
+        The greeting is the bot's first turn, so nothing else drives a
+        generation: without this bootstrap the start node cannot invoke its own
+        transition until the caller speaks.
+        """
+        llm = Mock()
+        llm.queue_frame = AsyncMock()
+        task = Mock()
+        task.queue_frame = AsyncMock()
+        context = LLMContext()
+
+        engine = PipecatEngine(
+            llm=llm,
+            context=context,
+            workflow=text_workflow,
+            call_context_vars={},
+            workflow_run_id=1,
+        )
+        engine.set_task(task)
+
+        result = await engine.queue_node_opening(
+            node_id=text_workflow.start_node_id,
+            previous_node_id=None,
+            generate_if_no_greeting=True,
+            generate_after_greeting=True,
+        )
+
+        assert result == "greeting"
+        queued_frame = task.queue_frame.await_args.args[0]
+        assert isinstance(queued_frame, TTSSpeakFrame)
+        assert queued_frame.text == TEXT_GREETING
+
+        # The generation must not race the greeting: the greeting only reaches
+        # the context when playback finishes.
+        llm.queue_frame.assert_not_awaited()
+
+        await engine.should_mute_user(BotStartedSpeakingFrame())
+        await engine.should_mute_user(BotStoppedSpeakingFrame())
+        await engine._post_greeting_generation_task
+
+        generated_frame = llm.queue_frame.await_args.args[0]
+        assert isinstance(generated_frame, LLMContextFrame)
+        assert generated_frame.context is context
+
+    @pytest.mark.asyncio
+    async def test_start_greeting_bootstrap_skipped_when_caller_speaks(
+        self, text_workflow: WorkflowGraph
+    ):
+        """A caller talking over the greeting already triggers a generation."""
+        llm = Mock()
+        llm.queue_frame = AsyncMock()
+        task = Mock()
+        task.queue_frame = AsyncMock()
+        context = LLMContext()
+
+        engine = PipecatEngine(
+            llm=llm,
+            context=context,
+            workflow=text_workflow,
+            call_context_vars={},
+            workflow_run_id=1,
+        )
+        engine.set_task(task)
+
+        await engine.queue_node_opening(
+            node_id=text_workflow.start_node_id,
+            previous_node_id=None,
+            generate_if_no_greeting=True,
+            generate_after_greeting=True,
+        )
+
+        context.add_message({"role": "user", "content": "Hi, who is this?"})
+        await engine.should_mute_user(BotStartedSpeakingFrame())
+        await engine.should_mute_user(BotStoppedSpeakingFrame())
+        await engine._post_greeting_generation_task
+
+        llm.queue_frame.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_greeted_node_without_bootstrap_flag_does_not_generate(
+        self, text_workflow: WorkflowGraph
+    ):
+        """Nodes reached by a transition get their generation from the tool result.
+
+        Scheduling a post-greeting generation for them too would make every
+        greeted node speak twice.
+        """
+        llm = Mock()
+        llm.queue_frame = AsyncMock()
+        task = Mock()
+        task.queue_frame = AsyncMock()
+
+        engine = PipecatEngine(
+            llm=llm,
+            context=LLMContext(),
+            workflow=text_workflow,
+            call_context_vars={},
+            workflow_run_id=1,
+        )
+        engine.set_task(task)
+
+        result = await engine.queue_node_opening(
+            node_id=text_workflow.start_node_id,
+            previous_node_id="some-other-node",
+            generate_if_no_greeting=True,
+        )
+
+        assert result == "greeting"
+        assert engine._post_greeting_generation_task is None
+        llm.queue_frame.assert_not_awaited()
 
 
 # ─── Tests: Transition Speech (Pipeline) ────────────────────────

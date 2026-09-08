@@ -172,6 +172,11 @@ def register_event_handlers(
                 node_id=engine.workflow.start_node_id,
                 previous_node_id=None,
                 generate_if_no_greeting=True,
+                # The start node's greeting is the bot's first turn, so nothing
+                # else will drive an LLM generation until the caller speaks --
+                # which means the start node could never invoke its own
+                # transition on its own.
+                generate_after_greeting=True,
             )
 
     @transport.event_handler("on_client_connected")

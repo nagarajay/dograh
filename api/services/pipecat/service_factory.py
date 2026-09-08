@@ -919,6 +919,18 @@ def create_tts_service(
         )
 
 
+# Groq exposes a `reasoning_format` request parameter only for its reasoning
+# models. Sending it to a non-reasoning model is rejected, so the switch is
+# keyed off the model family rather than applied to every Groq model.
+_GROQ_REASONING_MODEL_MARKERS = ("gpt-oss", "deepseek-r1", "qwen3")
+
+
+def _is_groq_reasoning_model(model: str) -> bool:
+    """Whether a Groq model emits reasoning that has to be kept out of content."""
+    lowered = (model or "").lower()
+    return any(marker in lowered for marker in _GROQ_REASONING_MODEL_MARKERS)
+
+
 def _migrate_deprecated_google_model(model: str) -> str:
     """Google removed the ``gemini-2.0-flash*`` models. Transparently upgrade
     any stored config that still references them to the 2.5 equivalent so old
@@ -984,9 +996,22 @@ def create_llm_service_from_provider(
             **kwargs,
         )
     elif provider == ServiceProviders.GROQ.value:
+        groq_extra: dict[str, object] = {}
+        if _is_groq_reasoning_model(model):
+            # Groq's reasoning models return their chain of thought in the
+            # message content by default, which the pipeline then hands to TTS
+            # -- the bot speaks its own reasoning. "hidden" keeps the reasoning
+            # out of the content entirely.
+            #
+            # It has to travel in extra_body: `extra` is merged into the
+            # top-level kwargs of AsyncCompletions.create(), whose signature is
+            # typed, so a Groq-only field passed there raises TypeError before
+            # any HTTP request is made. extra_body forwards it verbatim in the
+            # request body instead.
+            groq_extra["extra_body"] = {"reasoning_format": "hidden"}
         return GroqLLMService(
             api_key=api_key,
-            settings=GroqLLMSettings(model=model, temperature=0.1),
+            settings=GroqLLMSettings(model=model, temperature=0.1, extra=groq_extra),
         )
     elif provider == ServiceProviders.OPENROUTER.value:
         kwargs = {}

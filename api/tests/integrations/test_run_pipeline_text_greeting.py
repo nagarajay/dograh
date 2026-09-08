@@ -5,7 +5,10 @@ database with a workflow whose start node has a text greeting configured.
 The flow under test:
 
 1. ``maybe_trigger_initial_response`` (in ``event_handlers.py``) sees a
-   text greeting and queues ``TTSSpeakFrame(greeting)``.
+   text greeting and queues ``TTSSpeakFrame(greeting)``, followed by an
+   initial LLM generation once the greeting has finished playing (the start
+   node would otherwise be unable to invoke its own transition before the
+   caller speaks).
 2. ``MockTTSService`` synthesises audio for the greeting; the real
    ``MediaSender`` machinery in ``MockOutputTransport`` emits
    ``BotStartedSpeakingFrame`` and ``BotStoppedSpeakingFrame``.
@@ -147,14 +150,19 @@ async def _wait_for(predicate, *, timeout: float, interval: float = 0.05) -> boo
 async def _run_test_body(workflow_run_setup, db_session) -> None:
     workflow_run, user, workflow = workflow_run_setup
 
-    # Prepare the LLM with one step: the end_call function call.
-    # Edge label "End Call" maps to function name "end_call".
+    # Two steps. The first answers the start node's post-greeting generation
+    # without calling a transition, the way a real model would when the caller
+    # has not said anything yet. The second is the end_call function call the
+    # caller's reply triggers. Edge label "End Call" maps to "end_call".
+    bootstrap_chunks = MockLLMService.create_text_chunks("")
     end_call_chunks = MockLLMService.create_function_call_chunks(
         function_name="end_call",
         arguments={},
         tool_call_id="call_end_1",
     )
-    llm = MockLLMService(mock_steps=[end_call_chunks], chunk_delay=0.001)
+    llm = MockLLMService(
+        mock_steps=[bootstrap_chunks, end_call_chunks], chunk_delay=0.001
+    )
 
     # Short audio greeting so the bot finishes speaking quickly in tests.
     tts = MockTTSService(mock_audio_duration_ms=50, frame_delay=0)
@@ -235,10 +243,20 @@ async def _run_test_body(workflow_run_setup, db_session) -> None:
             )
             assert unmuted, "User input stayed muted after greeting playback"
 
-            # The LLM must not have been invoked yet — the greeting bypasses
-            # the LLM entirely (goes straight to TTS via TTSSpeakFrame).
-            assert llm.get_current_step() == 0, (
-                f"LLM should not have run yet; current_step={llm.get_current_step()}"
+            # The greeting itself bypasses the LLM (it goes straight to TTS via
+            # TTSSpeakFrame), but the start node's opening must still queue one
+            # LLM generation behind it: without that turn the start node cannot
+            # invoke its own transition until the caller speaks.
+            bootstrapped = await _wait_for(
+                lambda: llm.get_current_step() >= 1, timeout=5.0
+            )
+            assert bootstrapped, (
+                "Start node's post-greeting LLM generation never ran; "
+                f"current_step={llm.get_current_step()}"
+            )
+            assert llm.get_current_step() == 1, (
+                "Exactly one generation should follow the greeting; "
+                f"current_step={llm.get_current_step()}"
             )
 
             # Now simulate the user replying. SpeechTimeoutUserTurnStopStrategy
@@ -257,12 +275,13 @@ async def _run_test_body(workflow_run_setup, db_session) -> None:
             await asyncio.wait_for(run_task, timeout=10.0)
 
         # Outside the patch ctx so the assertions exercise real DB state.
-        # The first LLM run produces the end_call; the engine then transitions
-        # to the End node and triggers a second generation (which is empty —
-        # mock_steps[1] is unset). What matters is that at least one run
-        # happened, i.e. the user transcript actually drove the LLM.
-        assert llm.get_current_step() >= 1, (
-            f"Expected at least one LLM generation; got step={llm.get_current_step()}"
+        # Step 1 is the post-greeting generation, step 2 the end_call driven by
+        # the user transcript. The engine then transitions to the End node and
+        # triggers a further generation (empty — mock_steps[2] is unset), so
+        # only the lower bound is asserted.
+        assert llm.get_current_step() >= 2, (
+            "Expected the user transcript to drive a second LLM generation; "
+            f"got step={llm.get_current_step()}"
         )
 
         refreshed = await db_session.get_workflow_run_by_id(workflow_run.id)

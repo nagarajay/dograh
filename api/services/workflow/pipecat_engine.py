@@ -22,7 +22,7 @@ from pipecat.frames.frames import (
     TTSSpeakFrame,
 )
 from pipecat.pipeline.worker import PipelineWorker
-from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_context import NOT_GIVEN, LLMContext
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.settings import LLMSettings
 from pipecat.utils.enums import EndTaskReason
@@ -189,6 +189,10 @@ class PipecatEngine:
         self._speech_playback_started: asyncio.Event = asyncio.Event()
         self._speech_playback_finished: asyncio.Event = asyncio.Event()
 
+        # Tracks the task that queues a node's first LLM generation behind its
+        # greeting (see _schedule_post_greeting_generation).
+        self._post_greeting_generation_task: Optional[asyncio.Task] = None
+
         # Custom tool manager (initialized in initialize())
         self._custom_tool_manager: Optional[CustomToolManager] = None
 
@@ -305,9 +309,16 @@ class PipecatEngine:
     async def _update_llm_context(self, system_prompt: str, functions: list[dict]):
         """Update LLM settings with the composed system prompt and tool list."""
 
-        if functions:
-            tools_schema = ToolsSchema(standard_tools=functions)
-            self.context.set_tools(tools_schema)
+        # The destination node's tool set is published on every node change,
+        # including the empty case. Skipping the update when there are no
+        # functions left the previous node's transition tools advertised, so a
+        # terminal node could still be asked to call a transition that no
+        # longer exists. NOT_GIVEN rather than an empty ToolsSchema because an
+        # empty ToolsSchema serializes to `tools: []`, which OpenAI-compatible
+        # providers reject.
+        self.context.set_tools(
+            ToolsSchema(standard_tools=functions) if functions else NOT_GIVEN
+        )
 
         # For Gemini Live, set context on the LLM before _update_settings so that
         # _connect (triggered by reconnect) can read tools from it.
@@ -843,11 +854,25 @@ class PipecatEngine:
         node_id: str,
         previous_node_id: Optional[str] = None,
         generate_if_no_greeting: bool = False,
+        generate_after_greeting: bool = False,
     ) -> Literal["none", "greeting", "llm"]:
         """Queue the opening behavior for a node.
 
         This is the shared source of truth for how a node begins once the
         engine is ready and the node has already been set on the context.
+
+        Args:
+            node_id: The node whose opening is being queued.
+            previous_node_id: The node departed from, or None at call start.
+            generate_if_no_greeting: Queue an initial LLM generation when the
+                node has no greeting configured.
+            generate_after_greeting: Also queue an initial LLM generation once
+                a configured greeting has finished playing. Only the start node
+                wants this: its greeting is the bot's first turn, so without a
+                generation behind it the node cannot invoke its own transition
+                until the caller speaks. Nodes reached by a transition already
+                get their generation from the function call result, so passing
+                this for them would make every greeted node speak twice.
 
         Returns:
             "greeting" when a text/audio greeting was queued,
@@ -872,6 +897,8 @@ class PipecatEngine:
                     )
                     result = await self._fetch_recording_audio(**fetch_kwargs)
                     if result:
+                        if generate_after_greeting:
+                            self.arm_speech_playback()
                         await play_audio(
                             result.audio,
                             sample_rate=self._audio_config.pipeline_sample_rate
@@ -881,6 +908,8 @@ class PipecatEngine:
                             transcript=result.transcript,
                             append_to_context=True,
                         )
+                        if generate_after_greeting:
+                            self._schedule_post_greeting_generation()
                         return "greeting"
                     logger.warning(
                         f"Failed to fetch audio greeting {greeting_value}, "
@@ -891,9 +920,13 @@ class PipecatEngine:
                     # append_to_context=True so the assistant aggregator commits
                     # the greeting to the LLM context once TTS finishes; without
                     # it the LLM would re-greet on its first generation.
+                    if generate_after_greeting:
+                        self.arm_speech_playback()
                     await self.task.queue_frame(
                         TTSSpeakFrame(greeting_value, append_to_context=True)
                     )
+                    if generate_after_greeting:
+                        self._schedule_post_greeting_generation()
                     return "greeting"
 
         if (
@@ -908,6 +941,50 @@ class PipecatEngine:
             return "llm"
 
         return "none"
+
+    def _schedule_post_greeting_generation(self) -> None:
+        """Queue the node's first LLM turn once its greeting has played out.
+
+        Waiting is what makes this safe: the greeting only lands in the LLM
+        context when the assistant aggregator commits it at the end of
+        playback, so generating immediately would have the LLM greet a second
+        time. The wait runs in its own task because the caller is inside a
+        transport event handler and must not block the pipeline.
+        """
+        if self.llm is None or self.context is None:
+            return
+
+        self._post_greeting_generation_task = asyncio.create_task(
+            self._generate_after_greeting()
+        )
+
+    async def _generate_after_greeting(self) -> None:
+        """Wait out the greeting, then queue an initial LLM generation."""
+        try:
+            await self.wait_for_speech_playback()
+
+            if self.llm is None or self.context is None:
+                return
+
+            # If the caller spoke over the greeting, the user context
+            # aggregator has already triggered a generation for their turn.
+            # Queueing another here would run two generations against the same
+            # context.
+            if any(
+                message.get("role") == "user" for message in self.context.get_messages()
+            ):
+                logger.debug(
+                    "Caller spoke during the greeting; skipping the post-greeting "
+                    "generation"
+                )
+                return
+
+            logger.debug("Queueing post-greeting LLM generation for node opening")
+            await self.llm.queue_frame(LLMContextFrame(self.context))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Error queueing post-greeting LLM generation: {e}")
 
     async def _handle_end_node(self, node: Node) -> None:
         """Handle end node execution."""
@@ -1390,6 +1467,13 @@ class PipecatEngine:
             and not self._user_response_timeout_task.done()
         ):
             self._user_response_timeout_task.cancel()
+
+        # Cancel a post-greeting generation still waiting on playback.
+        if (
+            self._post_greeting_generation_task
+            and not self._post_greeting_generation_task.done()
+        ):
+            self._post_greeting_generation_task.cancel()
 
         # Cancel any in-flight background summarization.
         if self._context_summarization_manager:
