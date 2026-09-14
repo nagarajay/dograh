@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from loguru import logger
 from pydantic import ValidationError
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.future import select
 
@@ -11,6 +11,16 @@ from api.db.base_client import BaseDBClient
 from api.db.models import UserConfigurationModel, UserModel
 from api.enums import UserConfigurationKey
 from api.schemas.ai_model_configuration import EffectiveAIModelConfiguration
+
+# Arbitrary fixed key for the platform-bootstrap advisory lock (see
+# ``bootstrap_first_superadmin``). Any 64-bit constant works as long as it is
+# not reused by another advisory-lock caller in this codebase; there is none
+# today.
+_BOOTSTRAP_SUPERADMIN_LOCK_KEY = 0x646F677261685F31  # "dograh_1" in hex
+
+
+class SuperadminAlreadyExists(Exception):
+    """A platform super-admin already exists; bootstrap is one-time only."""
 
 
 class UserClient(BaseDBClient):
@@ -206,16 +216,94 @@ class UserClient(BaseDBClient):
             return result.scalars().first()
 
     async def create_user_with_email(
-        self, email: str, password_hash: str, name: str | None = None
+        self,
+        email: str,
+        password_hash: str,
+        name: str | None = None,
+        is_superuser: bool = False,
     ) -> UserModel:
-        """Create a new user with email and password hash."""
+        """Create a new user with email and password hash.
+
+        ``is_superuser`` defaults to False, matching ordinary signup. The
+        platform bootstrap path is the only caller that passes True, and it
+        does so directly at creation time rather than creating then
+        promoting, so there is never a moment where the row exists without
+        the authority it was created for.
+        """
         async with self.async_session() as session:
             user = UserModel(
                 provider_id=f"oss_{int(datetime.now(timezone.utc).timestamp())}_{uuid.uuid4()}",
                 email=email.lower(),
                 password_hash=password_hash,
+                is_superuser=is_superuser,
             )
             session.add(user)
             await session.commit()
             await session.refresh(user)
             return user
+
+    async def bootstrap_first_superadmin(
+        self, *, email: str, password_hash: str
+    ) -> tuple[UserModel, bool]:
+        """Atomically check-and-create/promote the platform's first super-admin.
+
+        The "no super-admin exists yet" check and the create-or-promote write
+        must happen as one indivisible step, or two concurrent first-bootstrap
+        requests can both pass the check and each mint a super-admin. A
+        Postgres transaction-scoped advisory lock (``pg_advisory_xact_lock``)
+        is the simplest tool for that here: it needs no new table or column,
+        it is held only for the lifetime of this transaction, and it is
+        released automatically on commit or rollback -- including on a crash
+        mid-transaction, unlike a session-scoped lock that would need explicit
+        unlocking. The second concurrent caller simply blocks until the first
+        commits, then re-runs its own count check against the now-updated
+        table and correctly refuses.
+
+        Returns ``(user, created)``, where ``created`` is False when an
+        existing user matching ``email`` was promoted instead of a new row
+        being inserted. Raises :class:`SuperadminAlreadyExists` if a
+        super-admin already exists anywhere -- this module raises no HTTP
+        exception itself, leaving that translation to the caller.
+        """
+        normalized_email = email.lower()
+        async with self.async_session() as session:
+            # No explicit ``session.begin()``: this session's transaction may
+            # already be open (the test suite's savepoint-isolation fixture
+            # reuses one shared session across calls), so the lock, the check
+            # and the write all run against whatever transaction is already
+            # current -- exactly like every other method in this class.
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": _BOOTSTRAP_SUPERADMIN_LOCK_KEY},
+            )
+
+            count_result = await session.execute(
+                select(func.count()).where(UserModel.is_superuser.is_(True))
+            )
+            if count_result.scalar_one() > 0:
+                raise SuperadminAlreadyExists()
+
+            existing_result = await session.execute(
+                select(UserModel).where(func.lower(UserModel.email) == normalized_email)
+            )
+            existing = existing_result.scalars().first()
+
+            if existing is not None:
+                existing.is_superuser = True
+                await session.commit()
+                await session.refresh(existing)
+                return existing, False
+
+            user = UserModel(
+                provider_id=(
+                    f"oss_{int(datetime.now(timezone.utc).timestamp())}_"
+                    f"{uuid.uuid4()}"
+                ),
+                email=normalized_email,
+                password_hash=password_hash,
+                is_superuser=True,
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            return user, True

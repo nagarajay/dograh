@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from api.db import db_client
 from api.db.models import UserModel
@@ -16,6 +16,7 @@ from api.services.auth.stack_auth import (
     stackauth,
 )
 from api.services.superuser.agent_inspection import get_agent_inspection
+from api.services.superuser.bootstrap import bootstrap_platform_superadmin
 from api.services.superuser.org_health import (
     get_organization_operational_state,
 )
@@ -719,7 +720,7 @@ async def get_workflow_runs(
 # ---------------------------------------------------------------------------
 # Platform provisioning
 #
-# These two endpoints share the /superuser prefix with the console's read APIs
+# These three endpoints share the /superuser prefix with the console's read APIs
 # above, and share nothing else. They are guarded by ``require_platform_admin``
 # -- a server-to-server shared secret -- rather than by ``get_superuser``,
 # which is an interactive human session and stays exactly as strict as it was.
@@ -795,6 +796,61 @@ class PlatformAPIKeyResponse(BaseModel):
     #: one. Purely informational: both outcomes are success, and a caller that
     #: cannot tell which of its attempts got through does not have to care.
     rotated: bool
+
+
+class PlatformBootstrapSuperadminRequest(BaseModel):
+    """The one-time seed for a deployment's first platform super-admin."""
+
+    email: EmailStr
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def password_min_length(cls, v: str) -> str:
+        # Same rule as ordinary signup (api/schemas/auth.py) -- this creates
+        # the same kind of local-auth credential, just through a different door.
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
+
+
+class PlatformBootstrapSuperadminResponse(BaseModel):
+    user_id: int
+    email: Optional[str]
+    #: False when this call promoted an existing user rather than creating one.
+    created: bool
+
+
+@router.post(
+    "/bootstrap-superadmin",
+    dependencies=[Depends(require_platform_admin)],
+    status_code=status.HTTP_200_OK,
+)
+async def bootstrap_superadmin(
+    request: PlatformBootstrapSuperadminRequest,
+) -> PlatformBootstrapSuperadminResponse:
+    """Seat the platform's first super-admin, with signup closed and no shell.
+
+    One-time by construction: refused with 409 the moment any super-admin
+    already exists on this deployment, regardless of which email is named. Not
+    ``/auth/signup`` -- creates no organization and no membership, and the
+    resulting user holds no ``selected_organization_id``, exactly like
+    ``scripts/bootstrap_superadmin.py``'s manual path. If the named email
+    already belongs to an existing user, that user is promoted in place
+    instead of a second identity being created.
+    """
+    try:
+        result = await bootstrap_platform_superadmin(
+            email=request.email, password=request.password
+        )
+    except ProvisioningConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    return PlatformBootstrapSuperadminResponse(
+        user_id=result.user.id,
+        email=result.user.email,
+        created=result.created,
+    )
 
 
 @router.post(
