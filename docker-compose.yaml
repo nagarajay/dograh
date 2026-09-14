@@ -13,33 +13,6 @@
 # https://docs.dograh.com/deployment/docker
 
 services:
-  postgres:
-    image: pgvector/pgvector:pg17
-    environment:
-      POSTGRES_USER: postgres
-      # Sourced from .env. Defaults to "postgres"
-      # NOTE: changing this on an existing install does NOT
-      # re-key the database — the password is baked into the volume on first init.
-      # You can manually change the password using psql in the container
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
-      POSTGRES_DB: postgres
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
-    networks:
-      - app-network
-
   redis:
     image: redis:7
     ports:
@@ -56,27 +29,6 @@ services:
     networks:
       - app-network
 
-  minio:
-    image: minio/minio
-    container_name: minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
-      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
-      MINIO_API_CORS_ALLOW_ORIGIN: "*"
-    ports:
-      - "127.0.0.1:9000:9000" # Bind to localhost explicitly
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - app-network
-
   dograh-init:
     image: bash:5.2
     container_name: dograh_init
@@ -87,7 +39,6 @@ services:
       PUBLIC_HOST: "${PUBLIC_HOST:-}"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
       BACKEND_API_ENDPOINT: "${BACKEND_API_ENDPOINT:-http://localhost:8000}"
-      MINIO_PUBLIC_ENDPOINT: "${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}"
       TURN_HOST: "${TURN_HOST:-}"
       TURN_SECRET: "${TURN_SECRET:-}"
       FASTAPI_WORKERS: "${FASTAPI_WORKERS:-1}"
@@ -168,8 +119,7 @@ services:
       # tunnel's URL at runtime instead (see api/utils/common.py).
       BACKEND_API_ENDPOINT: "${BACKEND_API_ENDPOINT:-}"
 
-      # Database configuration (using containerized postgres)
-      # DATABASE_URL: "postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres"
+      # Database configuration — Supabase Postgres. Set DATABASE_URL in .env.
       DATABASE_URL: "${DATABASE_URL}"
 
       # Read only by scripts/reset_app_data.py, which refuses to touch a
@@ -182,8 +132,9 @@ services:
       # Redis configuration (using containerized redis)
       REDIS_URL: "redis://:${REDIS_PASSWORD:-redissecret}@redis:6379"
 
-      # Storage configuration - bundled MinIO by default. Set ENABLE_AWS_S3=true
-      # in .env to make the API use AWS S3 or another S3-compatible server.
+      # Storage configuration - Supabase Storage (S3-compatible) by default.
+      # Set ENABLE_AWS_S3=true and the S3_* vars below (S3_ENDPOINT_URL for
+      # Supabase's S3 endpoint, or AWS S3 directly).
       ENABLE_AWS_S3: "${ENABLE_AWS_S3:-false}"
 
       # S3 backend configuration. Compose's .env file is used for interpolation,
@@ -203,17 +154,6 @@ services:
       S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-}"
       S3_SIGNATURE_VERSION: "${S3_SIGNATURE_VERSION:-}"
       S3_ADDRESSING_STYLE: "${S3_ADDRESSING_STYLE:-}"
-
-      # MinIO
-      MINIO_ENDPOINT: "minio:9000"
-      # Full URL (with scheme) browsers use to reach MinIO. Defaults to
-      # PUBLIC_BASE_URL for remote deployments (nginx proxies /voice-audio/) and to
-      # http://localhost:9000 for local; override only for a separate object store.
-      MINIO_PUBLIC_ENDPOINT: "${MINIO_PUBLIC_ENDPOINT:-}"
-      MINIO_ACCESS_KEY: "${MINIO_ROOT_USER:-minioadmin}"
-      MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
-      MINIO_BUCKET: "voice-audio"
-      MINIO_SECURE: "false"
 
       # Number of uvicorn worker processes (each is its own process bound to a
       # distinct port starting at 8000). dograh-init renders nginx upstreams
@@ -279,11 +219,7 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     healthcheck:
       test:
@@ -365,10 +301,7 @@ services:
       - app-network
 
 volumes:
-  postgres_data:
   redis_data:
-  minio-data:
-    driver: local
   nginx-generated:
     driver: local
   coturn-generated:
