@@ -61,6 +61,16 @@ BACKEND_API_ENDPOINT = (
 UI_APP_URL = os.getenv("UI_APP_URL", "http://localhost:3010")
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+
+# SQLAlchemy pool sizing, applied per process (each API worker, ARQ worker,
+# ari_manager and campaign_orchestrator process owns exactly one engine).
+# Worst-case DB connections = processes * (DB_POOL_SIZE + DB_MAX_OVERFLOW).
+# Defaults equal SQLAlchemy's own (5 + 10); docker-compose.yaml lowers them to
+# fit Supabase's session-pooler client limit.
+DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+DB_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "1800"))
 REDIS_URL = os.environ["REDIS_URL"]
 
 DEPLOYMENT_MODE = os.getenv("DEPLOYMENT_MODE", "oss")

@@ -3,12 +3,25 @@ from typing import Any, Dict, List
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api.constants import DATABASE_URL
+from api.constants import (
+    DATABASE_URL,
+    DB_MAX_OVERFLOW,
+    DB_POOL_RECYCLE,
+    DB_POOL_SIZE,
+    DB_POOL_TIMEOUT,
+)
 
 
 class BaseDBClient:
     def __init__(self):
-        self.engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
+        self.engine = create_async_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,
+            pool_size=DB_POOL_SIZE,
+            max_overflow=DB_MAX_OVERFLOW,
+            pool_timeout=DB_POOL_TIMEOUT,
+            pool_recycle=DB_POOL_RECYCLE,
+        )
         self.async_session = async_sessionmaker(bind=self.engine)
 
     async def execute_raw_query(

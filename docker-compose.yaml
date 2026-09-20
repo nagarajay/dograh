@@ -122,6 +122,16 @@ services:
       # Database configuration — Supabase Postgres. Set DATABASE_URL in .env.
       DATABASE_URL: "${DATABASE_URL}"
 
+      # Per-process SQLAlchemy pool. The container runs ari_manager,
+      # campaign_orchestrator, FASTAPI_WORKERS uvicorn and ARQ_WORKERS arq
+      # processes, each with its own pool. Keep
+      # processes * (POOL_SIZE + MAX_OVERFLOW) <= 12 to stay under Supabase's
+      # 15-client session-pooler limit (default: 4 * 3 = 12).
+      DB_POOL_SIZE: "${DB_POOL_SIZE:-2}"
+      DB_MAX_OVERFLOW: "${DB_MAX_OVERFLOW:-1}"
+      DB_POOL_TIMEOUT: "${DB_POOL_TIMEOUT:-30}"
+      DB_POOL_RECYCLE: "${DB_POOL_RECYCLE:-1800}"
+
       # Read only by scripts/reset_app_data.py, which refuses to touch a
       # database unless DOGRAH_ENV is "development" and the Supabase project
       # reference in DATABASE_URL matches DOGRAH_SUPABASE_PROJECT_REF. Unset
