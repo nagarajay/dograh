@@ -925,6 +925,18 @@ def create_tts_service(
 _GROQ_REASONING_MODEL_MARKERS = ("gpt-oss", "deepseek-r1", "qwen3")
 
 
+# Models observed to reject every reasoning_effort but "none" on Chat
+# Completions when the request carries function tools (which every workflow
+# turn does): "Function tools with reasoning_effort are not supported for
+# gpt-5.6-luna in /v1/chat/completions ... set reasoning_effort to 'none'".
+# Only models confirmed this way belong here; other GPT-5 models keep "minimal".
+_OPENAI_TOOLS_REQUIRE_NO_REASONING = frozenset({"gpt-5.6-luna"})
+
+
+def _openai_gpt5_reasoning_effort(model: str) -> str:
+    return "none" if model in _OPENAI_TOOLS_REQUIRE_NO_REASONING else "minimal"
+
+
 def _is_groq_reasoning_model(model: str) -> bool:
     """Whether a Groq model emits reasoning that has to be kept out of content."""
     lowered = (model or "").lower()
@@ -986,7 +998,10 @@ def create_llm_service_from_provider(
                 api_key=api_key,
                 settings=OpenAILLMSettings(
                     model=model,
-                    extra={"reasoning_effort": "minimal", "verbosity": "low"},
+                    extra={
+                        "reasoning_effort": _openai_gpt5_reasoning_effort(model),
+                        "verbosity": "low",
+                    },
                 ),
                 **kwargs,
             )
