@@ -218,6 +218,7 @@ class _ToolDocumentRefsMixin(BaseModel):
         "wait_for_user_after_greeting",
         "prompt",
         "allow_interrupt",
+        "allow_interrupt_after_greeting",
         "add_global_prompt",
         "delayed_start",
         "delayed_start_duration",
@@ -285,6 +286,16 @@ class _ToolDocumentRefsMixin(BaseModel):
         },
         "allow_interrupt": {
             "description": "When true, the user can interrupt the agent mid-utterance.",
+        },
+        "allow_interrupt_after_greeting": {
+            "display_name": "Allow Interruption After Greeting",
+            "description": (
+                "When true and Allow Interruption is off, only the opening "
+                "greeting is protected from interruption: once the greeting has "
+                "finished playing, the caller can interrupt this node's later "
+                "replies. Has no effect when Allow Interruption is on or no "
+                "greeting is configured."
+            ),
         },
         "tool_uuids": {
             "description": "Tools the agent can invoke during the opening turn.",
@@ -359,6 +370,9 @@ class StartCallNodeData(
         default=None, ui_type=PropertyType.recording_ref
     )
     wait_for_user_after_greeting: bool = spec_field(
+        default=False, ui_type=PropertyType.boolean
+    )
+    allow_interrupt_after_greeting: bool = spec_field(
         default=False, ui_type=PropertyType.boolean
     )
     delayed_start: bool = spec_field(default=False, ui_type=PropertyType.boolean)
@@ -514,6 +528,8 @@ class AgentNodeData(
     property_order=(
         "name",
         "prompt",
+        "generate_closing_turn",
+        "closing_fallback_message",
         "add_global_prompt",
         "extraction_enabled",
         "extraction_prompt",
@@ -533,6 +549,26 @@ class AgentNodeData(
                 "{{template_variables}} from extraction or pre-call fetch."
             ),
             "placeholder": "Thank the caller and confirm next steps before ending the call.",
+        },
+        "generate_closing_turn": {
+            "display_name": "Generate Closing Turn",
+            "description": (
+                "When true (default), arriving here runs one more LLM turn that "
+                "speaks the closing. When false, no further LLM turn runs: the "
+                "call ends once whatever the previous turn already said (or the "
+                "incoming transition's speech) has finished playing, so the "
+                "previous node's reply must carry the goodbye."
+            ),
+        },
+        "closing_fallback_message": {
+            "display_name": "Closing Fallback Message",
+            "description": (
+                "Only used when Generate Closing Turn is off. Spoken only if the "
+                "previous turn said nothing and the incoming transition has no "
+                "speech of its own, so the caller is never hung up on in silence."
+            ),
+            "display_options": DisplayOptions(show={"generate_closing_turn": [False]}),
+            "editor": "textarea",
         },
         "allow_interrupt": {"spec_exclude": True},
         "add_global_prompt": {
@@ -568,6 +604,10 @@ class EndCallNodeData(
     _ExtractionNodeDataMixin,
 ):
     is_end: bool = spec_field(default=True, spec_exclude=True)
+    generate_closing_turn: bool = spec_field(default=True, ui_type=PropertyType.boolean)
+    closing_fallback_message: Optional[str] = spec_field(
+        default=None, ui_type=PropertyType.string
+    )
 
 
 @node_spec(

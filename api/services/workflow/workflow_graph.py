@@ -132,6 +132,11 @@ class Node:
         self.wait_for_user_after_greeting = getattr(
             data, "wait_for_user_after_greeting", False
         )
+        self.allow_interrupt_after_greeting = getattr(
+            data, "allow_interrupt_after_greeting", False
+        )
+        self.generate_closing_turn = getattr(data, "generate_closing_turn", True)
+        self.closing_fallback_message = getattr(data, "closing_fallback_message", None)
         self.delayed_start = getattr(data, "delayed_start", False)
         self.delayed_start_duration = getattr(data, "delayed_start_duration", None)
         self.tool_uuids = getattr(data, "tool_uuids", None)

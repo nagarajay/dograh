@@ -22,6 +22,13 @@ DEFAULT_MAX_CALL_DURATION_SECONDS = 300
 MAX_CALL_DURATION_SECONDS = 1200
 DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS = 10.0
 DEFAULT_SMART_TURN_STOP_SECS = 2.0
+# Silence the default "transcription" turn-stop strategy waits for after VAD
+# reports the caller stopped (VAD's own 0.2 s stop window comes on top of this).
+# Read from the workflow configuration key ``user_speech_timeout_secs``; it is
+# not part of WorkflowConfigurationDefaults, so it adds no generated API surface.
+DEFAULT_USER_SPEECH_TIMEOUT_SECS = 0.6
+MIN_USER_SPEECH_TIMEOUT_SECS = 0.2
+MAX_USER_SPEECH_TIMEOUT_SECS = 3.0
 DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5

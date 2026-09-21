@@ -46,6 +46,22 @@ RULES:
 - *NEVER* mix modes in a single response, since we rely on the markers to decide whether to play using TTS or Pre-recorded audio."""
 
 
+def node_uses_recording_markers(
+    *,
+    node: "Node",
+    format_prompt: Callable[[str], str],
+    has_recordings: bool,
+) -> bool:
+    """Whether the LLM may prefix this node's replies with a response-mode marker.
+
+    Recording response-mode instructions are only added to a node's system
+    prompt when the workflow has recordings *and* the node's own prompt
+    references a ``RECORDING_ID:``. Everywhere else the model is never told
+    about the ``▸``/``●`` markers, so nothing downstream needs to wait for one.
+    """
+    return has_recordings and "RECORDING_ID:" in format_prompt(node.prompt)
+
+
 def compose_system_prompt_for_node(
     *,
     node: "Node",

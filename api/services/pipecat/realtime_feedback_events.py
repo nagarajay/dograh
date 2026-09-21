@@ -123,6 +123,50 @@ def build_ttfb_metric_event(
     }
 
 
+# Not a member of pipecat's RealtimeFeedbackType: it is a Dograh-side diagnostic,
+# and consumers that do not know it ignore unknown event types.
+LATENCY_BREAKDOWN_EVENT_TYPE = "rtf-latency-breakdown"
+
+
+def build_latency_breakdown_event(breakdown: Any) -> dict[str, Any]:
+    """Compact per-turn latency stages from a pipecat ``LatencyBreakdown``.
+
+    ``user_turn_secs`` runs from the caller's last voice to the turn being
+    committed. ``ttfb`` lists each service that reported a first-byte time
+    (the LLM, the TTS, and the recording router's hold of the reply), and
+    ``text_aggregation_secs`` is the TTS's wait for the first sentence.
+    """
+    aggregation = getattr(breakdown, "text_aggregation", None)
+    return {
+        "type": LATENCY_BREAKDOWN_EVENT_TYPE,
+        "payload": {
+            "user_turn_secs": _rounded(getattr(breakdown, "user_turn_secs", None)),
+            "ttfb": [
+                {
+                    "processor": item.processor,
+                    "model": item.model,
+                    "secs": _rounded(item.duration_secs),
+                }
+                for item in getattr(breakdown, "ttfb", [])
+            ],
+            "text_aggregation_secs": _rounded(
+                aggregation.duration_secs if aggregation else None
+            ),
+            "function_calls": [
+                {
+                    "function_name": call.function_name,
+                    "secs": _rounded(call.duration_secs),
+                }
+                for call in getattr(breakdown, "function_calls", [])
+            ],
+        },
+    }
+
+
+def _rounded(value: float | None) -> float | None:
+    return None if value is None else round(value, 4)
+
+
 def build_pipeline_error_event(
     *,
     error: str,

@@ -12,6 +12,7 @@ Pattern modelled after ``pipecat.turns.user_turn_completion_mixin`` – buffer
 streaming LLM text tokens until the mode marker is detected, then act.
 """
 
+import time
 import uuid
 from typing import Awaitable, Callable, Optional
 
@@ -27,11 +28,13 @@ from pipecat.frames.frames import (
     InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMTextFrame,
+    MetricsFrame,
     TTSAudioRawFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
     TTSTextFrame,
 )
+from pipecat.metrics.metrics import TTFBMetricsData
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
@@ -50,6 +53,11 @@ class RecordingRouterProcessor(FrameProcessor):
         audio_sample_rate: Pipeline sample rate for OutputAudioRawFrame.
         fetch_recording_audio: Async callback that takes a recording_id and
             returns a RecordingAudio (audio + transcript), or None on failure.
+        markers_expected: Optional callback saying whether the current reply
+            may begin with a ``▸``/``●`` marker. When it returns False the
+            reply is streamed straight to TTS instead of being held until a
+            marker (or the end of the reply) arrives. Omitted, every reply is
+            held for marker detection, as before.
     """
 
     def __init__(
@@ -57,11 +65,13 @@ class RecordingRouterProcessor(FrameProcessor):
         *,
         audio_sample_rate: int,
         fetch_recording_audio: Callable[..., Awaitable[Optional[RecordingAudio]]],
+        markers_expected: Optional[Callable[[], bool]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self._audio_sample_rate = audio_sample_rate
         self._fetch_recording_audio = fetch_recording_audio
+        self._markers_expected = markers_expected
 
         # Per-response state
         self._frame_buffer: list[tuple[LLMTextFrame, FrameDirection]] = []
@@ -69,6 +79,8 @@ class RecordingRouterProcessor(FrameProcessor):
         self._recording_id_buffer = ""
         self._recording_playback_started = False
         self._second_marker_seen = False
+        # Monotonic time the first text of the current reply was held back.
+        self._hold_started_at: Optional[float] = None
 
     # ------------------------------------------------------------------
     # Frame dispatch
@@ -101,6 +113,21 @@ class RecordingRouterProcessor(FrameProcessor):
         if self._second_marker_seen:
             return
 
+        # --- No marker can arrive: stream straight through ---
+        # Decided on the first text of a reply. A reply that opens with a marker
+        # anyway (the model volunteering one) still takes the detection path so
+        # the marker is stripped rather than spoken.
+        if self._mode is None and not self._frame_buffer:
+            if (
+                self._markers_expected is not None
+                and not self._markers_expected()
+                and not frame.text.lstrip().startswith((TTS_MARKER, RECORDING_MARKER))
+            ):
+                self._mode = "passthrough"
+        if self._mode == "passthrough":
+            await self.push_frame(frame, direction)
+            return
+
         # --- TTS mode established: pass text through normally ---
         if self._mode == "tts":
             if RECORDING_MARKER in frame.text:
@@ -128,6 +155,8 @@ class RecordingRouterProcessor(FrameProcessor):
             return
 
         # --- Detection mode: buffer until marker found ---
+        if not self._frame_buffer:
+            self._hold_started_at = time.monotonic()
         self._frame_buffer.append((frame, direction))
         buffered_text = self._buffered_text()
 
@@ -150,12 +179,14 @@ class RecordingRouterProcessor(FrameProcessor):
                         remaining = remaining[1:]
                     self._recording_id_buffer += remaining
 
+            await self._report_hold()
             self._frame_buffer = []
             return
 
         # Check for TTS marker (▸)
         if TTS_MARKER in buffered_text:
             self._mode = "tts"
+            await self._report_hold()
             marker_end = buffered_text.index(TTS_MARKER) + len(TTS_MARKER)
 
             # Push buffered frames — skip_tts for marker portion, normal for the rest
@@ -227,6 +258,7 @@ class RecordingRouterProcessor(FrameProcessor):
                 "RecordingRouterProcessor: no response mode marker found, "
                 "passing text to TTS as-is"
             )
+            await self._report_hold()
             for buf_frame, buf_dir in self._frame_buffer:
                 await self.push_frame(buf_frame, buf_dir)
 
@@ -275,6 +307,26 @@ class RecordingRouterProcessor(FrameProcessor):
     # State management
     # ------------------------------------------------------------------
 
+    async def _report_hold(self) -> None:
+        """Report how long the first text of a reply was held for marker detection.
+
+        Pushed as a TTFB-shaped metric so the pipeline's latency breakdown
+        places it between the LLM's first text and the TTS request.
+        """
+        started_at, self._hold_started_at = self._hold_started_at, None
+        if started_at is None:
+            return
+        await self.push_frame(
+            MetricsFrame(
+                data=[
+                    TTFBMetricsData(
+                        processor=self.name,
+                        value=time.monotonic() - started_at,
+                    )
+                ]
+            )
+        )
+
     def _buffered_text(self) -> str:
         """Return concatenated text from the frame buffer."""
         return "".join(f.text for f, _ in self._frame_buffer)
@@ -286,3 +338,4 @@ class RecordingRouterProcessor(FrameProcessor):
         self._recording_id_buffer = ""
         self._recording_playback_started = False
         self._second_marker_seen = False
+        self._hold_started_at = None

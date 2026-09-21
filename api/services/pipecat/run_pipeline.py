@@ -14,6 +14,9 @@ from api.schemas.workflow_configurations import (
     DEFAULT_SMART_TURN_STOP_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
     DEFAULT_TURN_START_STRATEGY,
+    DEFAULT_USER_SPEECH_TIMEOUT_SECS,
+    MAX_USER_SPEECH_TIMEOUT_SECS,
+    MIN_USER_SPEECH_TIMEOUT_SECS,
     WorkflowConfigurationDefaults,
 )
 from api.services.call_concurrency import call_concurrency
@@ -46,6 +49,7 @@ from api.services.pipecat.pipeline_engine_callbacks_processor import (
 from api.services.pipecat.pipeline_metrics_aggregator import PipelineMetricsAggregator
 from api.services.pipecat.pre_call_fetch import execute_pre_call_fetch
 from api.services.pipecat.realtime_feedback_events import (
+    build_latency_breakdown_event,
     build_node_transition_event,
 )
 from api.services.pipecat.realtime_feedback_observer import (
@@ -133,6 +137,24 @@ def _resolve_user_turn_stop_timeout(
     return DEFAULT_USER_TURN_STOP_TIMEOUT
 
 
+def _resolve_user_speech_timeout(run_configs: dict) -> float:
+    """Silence the default turn-stop strategy waits for once VAD reports a stop.
+
+    Unset or invalid values keep the long-standing default rather than failing
+    the call.
+    """
+    raw = run_configs.get("user_speech_timeout_secs")
+    if raw is None or isinstance(raw, bool):
+        return DEFAULT_USER_SPEECH_TIMEOUT_SECS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_USER_SPEECH_TIMEOUT_SECS
+    if not (MIN_USER_SPEECH_TIMEOUT_SECS <= value <= MAX_USER_SPEECH_TIMEOUT_SECS):
+        return DEFAULT_USER_SPEECH_TIMEOUT_SECS
+    return value
+
+
 def _resolve_turn_start_min_words(run_configs: dict) -> int:
     return max(
         1,
@@ -204,7 +226,11 @@ def _create_non_realtime_user_turn_stop_strategies(
             )
         ]
 
-    return [SpeechTimeoutUserTurnStopStrategy()]
+    return [
+        SpeechTimeoutUserTurnStopStrategy(
+            user_speech_timeout=_resolve_user_speech_timeout(run_configs)
+        )
+    ]
 
 
 def _create_realtime_user_turn_config(provider: str):
@@ -1043,6 +1069,9 @@ async def _run_pipeline_impl(
         recording_router = RecordingRouterProcessor(
             audio_sample_rate=audio_config.pipeline_sample_rate,
             fetch_recording_audio=fetch_audio,
+            # Replies from nodes that never mention a recording cannot begin
+            # with a marker, so they are streamed to TTS rather than held.
+            markers_expected=engine.recording_markers_expected,
         )
         # Warm the recording cache in the background so audio is ready
         # before the first playback request.
@@ -1141,6 +1170,18 @@ async def _run_pipeline_impl(
                 await in_memory_logs_buffer.append(message)
             except Exception as e:
                 logger.error(f"Failed to append latency to logs buffer: {e}")
+
+    # Persist where each turn's latency went (turn commit, LLM, router hold, TTS)
+    if task.user_bot_latency_observer:
+
+        @task.user_bot_latency_observer.event_handler("on_latency_breakdown")
+        async def on_latency_breakdown(observer, breakdown):
+            try:
+                await in_memory_logs_buffer.append(
+                    build_latency_breakdown_event(breakdown)
+                )
+            except Exception as e:
+                logger.error(f"Failed to append latency breakdown to logs buffer: {e}")
 
     # Register turn log handlers for all call types (WebRTC and telephony)
     register_turn_log_handlers(

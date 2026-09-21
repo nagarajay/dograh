@@ -41,6 +41,10 @@ class UserIdleHandler:
 
     async def handle_idle(self, aggregator):
         """Handle user idle event with escalating prompts."""
+        # A call already ending must not be asked whether anyone is there.
+        if self._engine.closing_in_progress or self._engine.is_call_disposed():
+            return
+
         self._retry_count += 1
         logger.debug(f"Handling user_idle, attempt: {self._retry_count}")
 
@@ -97,6 +101,8 @@ def create_generation_started_callback(engine: "PipecatEngine"):
         logger.debug("LLM generation started in callback processor")
         # Clear reference text from previous generation
         engine._current_llm_generation_reference_text = ""
+        # Speech that starts after this point belongs to this generation.
+        engine._bot_started_count_at_generation = engine._bot_started_count
 
     return handle_generation_started
 

@@ -66,6 +66,7 @@ from api.services.workflow.mcp_tool_session import McpToolSession
 from api.services.workflow.pipecat_engine_context_composer import (
     compose_functions_for_node,
     compose_system_prompt_for_node,
+    node_uses_recording_markers,
 )
 from api.services.workflow.pipecat_engine_context_summarizer import (
     ContextSummarizationManager,
@@ -154,6 +155,9 @@ class PipecatEngine:
         self._call_dispositions = tuple(call_dispositions or ())
         self._initialized = False
         self._call_disposed = False
+        # Set once a transition into an End node that opted out of a closing
+        # turn has begun; the user-idle prompt must not fire during it.
+        self.closing_in_progress = False
         self._current_node: Optional[Node] = None
         self._gathered_context: dict = {}
         self._user_response_timeout_task: Optional[asyncio.Task] = None
@@ -183,6 +187,12 @@ class PipecatEngine:
         # Tracks whether the bot is currently speaking (for allow_interrupt logic)
         self._bot_is_speaking: bool = False
 
+        # How many times the bot has started speaking, and the value that count
+        # had when the current LLM generation began. Together they tell whether
+        # a generation's speech has already played out (see _wait_for_closing_speech).
+        self._bot_started_count: int = 0
+        self._bot_started_count_at_generation: int = 0
+
         # Playback tracking for speech a caller needs to await (see
         # arm_speech_playback / wait_for_speech_playback). Armed state is
         # "nothing started yet", so both events start cleared.
@@ -192,6 +202,16 @@ class PipecatEngine:
         # Tracks the task that queues a node's first LLM generation behind its
         # greeting (see _schedule_post_greeting_generation).
         self._post_greeting_generation_task: Optional[asyncio.Task] = None
+
+        # True from the moment a node's opening greeting is queued until the bot
+        # next stops speaking, for nodes that set ``allow_interrupt_after_greeting``.
+        # While true the node's ``allow_interrupt=False`` protection applies;
+        # afterwards the node's own replies are interruptible.
+        self._opening_speech_active: bool = False
+
+        # Whether the current node's prompt teaches the LLM the recording
+        # response-mode markers (see recording_markers_expected).
+        self._recording_markers_expected: bool = has_recordings
 
         # Custom tool manager (initialized in initialize())
         self._custom_tool_manager: Optional[CustomToolManager] = None
@@ -349,14 +369,57 @@ class PipecatEngine:
             logger.info(f"Arguments: {function_call_params.arguments}")
 
             try:
+                # An End node that opts out of a closing turn ends the call on
+                # what the previous turn already said, with no further LLM
+                # completion. Decided before anything below can add to the
+                # generation's spoken text.
+                target_node = self.workflow.nodes.get(transition_to_node)
+                skip_closing_generation = bool(
+                    target_node is not None
+                    and target_node.is_end
+                    and not target_node.generate_closing_turn
+                )
+
+                if skip_closing_generation:
+                    self.closing_in_progress = True
+
                 # Perform variable extraction before transitioning to new node
                 await self._perform_variable_extraction_if_needed(
                     self._current_node,
                     run_in_background=self._run_transition_variable_extraction_in_background,
                 )
 
-                # Queue transition speech/audio before switching nodes
+                # Read after the awaits above so the text callback has had every
+                # chance to record what this generation streamed, and before
+                # anything below can add to it.
+                previous_turn_spoke = bool(
+                    self._current_llm_generation_reference_text.strip()
+                )
+
+                # With no closing turn, a caller must never be hung up on in
+                # silence: fall back to the End node's own message, but only when
+                # nothing else is going to be said, so the goodbye is never
+                # doubled.
+                speech_text = transition_speech
                 speech_type = transition_speech_type or "text"
+                if (
+                    skip_closing_generation
+                    and not previous_turn_spoke
+                    and not transition_speech
+                    and not transition_speech_recording_id
+                    and target_node.closing_fallback_message
+                ):
+                    speech_text = self._format_prompt(
+                        target_node.closing_fallback_message
+                    )
+                    speech_type = "text"
+
+                # Speech that started after this point belongs to the closing.
+                # Speech the generation itself streamed counts from its start;
+                # anything queued below counts from when it is queued.
+                closing_speech_baseline = self._bot_started_count_at_generation
+
+                # Queue transition speech/audio before switching nodes
                 if (
                     speech_type == "audio"
                     and transition_speech_recording_id
@@ -366,6 +429,7 @@ class PipecatEngine:
                         f"Playing transition audio: {transition_speech_recording_id}"
                     )
                     self._queued_speech_mute_state = "waiting"
+                    closing_speech_baseline = self._bot_started_count
                     result = await self._fetch_recording_audio(
                         recording_pk=int(transition_speech_recording_id)
                     )
@@ -383,12 +447,13 @@ class PipecatEngine:
                         logger.warning(
                             f"Failed to fetch transition audio {transition_speech_recording_id}"
                         )
-                elif transition_speech:
-                    logger.info(f"Playing transition speech: {transition_speech}")
+                elif speech_text:
+                    logger.info(f"Playing transition speech: {speech_text}")
                     self._queued_speech_mute_state = "waiting"
+                    closing_speech_baseline = self._bot_started_count
                     await self.task.queue_frame(
                         TTSSpeakFrame(
-                            transition_speech,
+                            speech_text,
                             append_to_context=False,
                             persist_to_logs=True,
                         )
@@ -412,11 +477,23 @@ class PipecatEngine:
 
                     # Queue EndFrame if we just transitioned to EndNode
                     if self._current_node.is_end:
+                        if skip_closing_generation:
+                            # Nothing downstream will generate anything more, so
+                            # the only thing left to protect is the goodbye
+                            # already on its way to the caller.
+                            await self._wait_for_closing_speech(
+                                baseline=closing_speech_baseline,
+                                speech_expected=previous_turn_spoke
+                                or self._queued_speech_mute_state != "idle",
+                            )
                         await self.end_call_with_reason(EndTaskReason.END_CALL.value)
 
                 result = {"status": "done"}
 
                 properties = FunctionCallResultProperties(
+                    # False only when the End node opted out of a closing turn;
+                    # None keeps the framework default (run the LLM).
+                    run_llm=False if skip_closing_generation else None,
                     on_context_updated=on_context_updated,
                 )
 
@@ -735,7 +812,20 @@ class PipecatEngine:
             node=node,
             custom_tool_manager=self._custom_tool_manager,
         )
+        self._recording_markers_expected = node_uses_recording_markers(
+            node=node,
+            format_prompt=self._format_prompt,
+            has_recordings=self._has_recordings,
+        )
         await self._update_llm_context(system_prompt, functions)
+
+    def recording_markers_expected(self) -> bool:
+        """Whether the current node's LLM replies may begin with a ▸/● marker.
+
+        The recording router uses this to stream text straight to TTS when no
+        marker can arrive, instead of holding every reply until it ends.
+        """
+        return self._recording_markers_expected
 
     async def set_node(self, node_id: str, emit_transition_event: bool = True):
         """
@@ -753,6 +843,8 @@ class PipecatEngine:
 
         # Set current node for all nodes (including static ones) so STT mute filter works
         self._current_node = node
+        if not node.is_start:
+            self._opening_speech_active = False
 
         # Track visited nodes in gathered context for call tags
         nodes_visited = self._gathered_context.setdefault("nodes_visited", [])
@@ -890,6 +982,8 @@ class PipecatEngine:
             greeting_info = self.get_node_greeting(node_id)
             if greeting_info:
                 greeting_type, greeting_value = greeting_info
+                if node is not None and node.allow_interrupt_after_greeting:
+                    self._opening_speech_active = True
                 if (
                     greeting_type in {"audio", "audio_recording_id"}
                     and greeting_value
@@ -1252,6 +1346,48 @@ class PipecatEngine:
 
         return True
 
+    async def _wait_for_closing_speech(
+        self,
+        *,
+        baseline: int,
+        speech_expected: bool,
+        start_timeout: float = 3.0,
+        playback_timeout: float = 30.0,
+    ) -> None:
+        """Hold the hangup until the closing speech has finished playing.
+
+        ``baseline`` is the bot-started count from before the closing speech was
+        generated or queued, so speech that has already begun (and possibly
+        already finished) is told apart from speech that has not started yet.
+        ``speech_expected`` says something was queued or streamed to TTS.
+
+        * Bot speaking now: wait for it to stop.
+        * Already spoke since ``baseline``: it has played out, nothing to wait for.
+        * Expected but not yet audible: wait for a fresh start, then its end.
+
+        Bounded, so a TTS that never speaks cannot hold the call open.
+        """
+        if self._bot_is_speaking:
+            try:
+                await asyncio.wait_for(
+                    self._speech_playback_finished.wait(), timeout=playback_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Closing speech did not finish within {playback_timeout}s; "
+                    "ending the call"
+                )
+            return
+
+        if self._bot_started_count > baseline:
+            return
+
+        if speech_expected:
+            self.arm_speech_playback()
+            await self.wait_for_speech_playback(
+                start_timeout=start_timeout, playback_timeout=playback_timeout
+            )
+
     async def should_mute_user(self, frame: "Frame") -> bool:
         """
         Callback for CallbackUserMuteStrategy to determine if the user should be muted.
@@ -1266,6 +1402,7 @@ class PipecatEngine:
         # Track bot speaking state from frames
         if isinstance(frame, BotStartedSpeakingFrame):
             self._bot_is_speaking = True
+            self._bot_started_count += 1
             if self._queued_speech_mute_state == "waiting":
                 self._queued_speech_mute_state = "playing"
             self._speech_playback_started.set()
@@ -1273,6 +1410,8 @@ class PipecatEngine:
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_is_speaking = False
             self._queued_speech_mute_state = "idle"
+            # The opening greeting, the only speech that flag protects, is over.
+            self._opening_speech_active = False
             self._speech_playback_finished.set()
 
         # Always mute if pipeline is shutting down
@@ -1285,8 +1424,15 @@ class PipecatEngine:
 
         # Mute if bot is speaking and current node doesn't allow interruption
         if self._bot_is_speaking and self._current_node:
-            # If we should not allow interruption, mute the pipeline
+            # If we should not allow interruption, mute the pipeline. A node that
+            # sets ``allow_interrupt_after_greeting`` only protects its opening
+            # greeting; its later replies are interruptible.
             if not self._current_node.allow_interrupt:
+                if (
+                    self._current_node.allow_interrupt_after_greeting
+                    and not self._opening_speech_active
+                ):
+                    return False
                 return True
 
         return False

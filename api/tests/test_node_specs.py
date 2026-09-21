@@ -306,6 +306,7 @@ def test_all_registered_node_models_inherit_base_node_data():
                 "wait_for_user_after_greeting",
                 "prompt",
                 "allow_interrupt",
+                "allow_interrupt_after_greeting",
                 "add_global_prompt",
                 "delayed_start",
                 "delayed_start_duration",
@@ -338,6 +339,8 @@ def test_all_registered_node_models_inherit_base_node_data():
             [
                 "name",
                 "prompt",
+                "generate_closing_turn",
+                "closing_fallback_message",
                 "add_global_prompt",
                 "extraction_enabled",
                 "extraction_prompt",

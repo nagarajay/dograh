@@ -38,6 +38,14 @@ export interface EndCall {
      */
     prompt: string;
     /**
+     * When true (default), arriving here runs one more LLM turn that speaks the closing. When false, no further LLM turn runs: the call ends once whatever the previous turn already said (or the incoming transition's speech) has finished playing, so the previous node's reply must carry the goodbye.
+     */
+    generate_closing_turn?: boolean;
+    /**
+     * Only used when Generate Closing Turn is off. Spoken only if the previous turn said nothing and the incoming transition has no speech of its own, so the caller is never hung up on in silence.
+     */
+    closing_fallback_message?: string;
+    /**
      * When true and a Global node exists, prepends the global prompt to this node's prompt at runtime.
      */
     add_global_prompt?: boolean;

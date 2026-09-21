@@ -60,6 +60,10 @@ export interface StartCall {
      */
     allow_interrupt?: boolean;
     /**
+     * When true and Allow Interruption is off, only the opening greeting is protected from interruption: once the greeting has finished playing, the caller can interrupt this node's later replies. Has no effect when Allow Interruption is on or no greeting is configured.
+     */
+    allow_interrupt_after_greeting?: boolean;
+    /**
      * When true and a Global node exists, prepends the global prompt to this node's prompt at runtime.
      */
     add_global_prompt?: boolean;
