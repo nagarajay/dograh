@@ -148,6 +148,7 @@ class WorkflowClient(BaseDBClient):
     async def publish_workflow_draft(
         self,
         workflow_id: int,
+        expected_definition_id: int | None = None,
     ) -> WorkflowDefinitionModel:
         """Promote the current draft to published.
 
@@ -157,15 +158,68 @@ class WorkflowClient(BaseDBClient):
         - Sets is_current for backward compatibility
         """
         async with self.async_session() as session:
-            # Find the draft
-            result = await session.execute(
-                select(WorkflowDefinitionModel).where(
-                    WorkflowDefinitionModel.workflow_id == workflow_id,
-                    WorkflowDefinitionModel.status == "draft",
+            # Serialize publication for this workflow. The expected ID is what
+            # prevents a retry from accidentally promoting a newer draft.
+            workflow_result = await session.execute(
+                select(WorkflowModel)
+                .where(WorkflowModel.id == workflow_id)
+                .with_for_update()
+            )
+            workflow = workflow_result.scalar_one_or_none()
+            if workflow is None:
+                raise ValueError(f"Workflow {workflow_id} not found")
+
+            if (
+                expected_definition_id is not None
+                and workflow.released_definition_id == expected_definition_id
+            ):
+                released_result = await session.execute(
+                    select(WorkflowDefinitionModel).where(
+                        WorkflowDefinitionModel.id == expected_definition_id,
+                        WorkflowDefinitionModel.workflow_id == workflow_id,
+                        WorkflowDefinitionModel.status == "published",
+                    )
                 )
+                released = released_result.scalar_one_or_none()
+                if released is not None:
+                    return released
+
+            if expected_definition_id is not None:
+                competing_result = await session.execute(
+                    select(WorkflowDefinitionModel.id)
+                    .where(
+                        WorkflowDefinitionModel.workflow_id == workflow_id,
+                        WorkflowDefinitionModel.status == "draft",
+                        WorkflowDefinitionModel.id != expected_definition_id,
+                    )
+                    .with_for_update()
+                )
+                if competing_result.first() is not None:
+                    raise ValueError(
+                        f"Publish conflict: another draft exists for workflow "
+                        f"{workflow_id}; refresh before publishing"
+                    )
+
+            # Find the exact expected draft, or preserve the legacy current-draft
+            # behavior when no expectation was supplied.
+            draft_filters = [
+                WorkflowDefinitionModel.workflow_id == workflow_id,
+                WorkflowDefinitionModel.status == "draft",
+            ]
+            if expected_definition_id is not None:
+                draft_filters.append(
+                    WorkflowDefinitionModel.id == expected_definition_id
+                )
+            result = await session.execute(
+                select(WorkflowDefinitionModel).where(*draft_filters).with_for_update()
             )
             draft = result.scalars().first()
             if not draft:
+                if expected_definition_id is not None:
+                    raise ValueError(
+                        f"Publish conflict: draft definition {expected_definition_id} "
+                        "is stale, missing, or already superseded"
+                    )
                 raise ValueError(f"No draft exists for workflow {workflow_id}")
 
             # Archive the current published version
@@ -184,10 +238,6 @@ class WorkflowClient(BaseDBClient):
             draft.is_current = True
 
             # Update workflow's released pointer + legacy fields
-            wf_result = await session.execute(
-                select(WorkflowModel).where(WorkflowModel.id == workflow_id)
-            )
-            workflow = wf_result.scalars().first()
             workflow.released_definition_id = draft.id
             workflow.workflow_definition = draft.workflow_json
             workflow.workflow_configurations = draft.workflow_configurations

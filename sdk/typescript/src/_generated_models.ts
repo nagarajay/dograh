@@ -1388,6 +1388,8 @@ export interface components {
             };
             /** Current Definition Id */
             current_definition_id: number | null;
+            /** Draft Definition Id */
+            draft_definition_id?: number | null;
             /** Template Context Variables */
             template_context_variables?: {
                 [key: string]: unknown;

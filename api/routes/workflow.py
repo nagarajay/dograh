@@ -281,6 +281,7 @@ class WorkflowResponse(BaseModel):
     created_at: datetime
     workflow_definition: dict
     current_definition_id: int | None
+    draft_definition_id: int | None = None
     template_context_variables: dict | None = None
     call_disposition_codes: CallDispositionCodes | None = None
     total_runs: int | None = None
@@ -353,6 +354,13 @@ class WorkflowVersionResponse(BaseModel):
     workflow_json: dict
     workflow_configurations: dict | None = None
     template_context_variables: dict | None = None
+
+
+class PublishWorkflowRequest(BaseModel):
+    expected_definition_id: int | None = Field(
+        default=None,
+        description="Publish this exact draft definition; retries are idempotent.",
+    )
 
 
 class UpdateWorkflowStatusRequest(BaseModel):
@@ -526,6 +534,7 @@ async def create_workflow(
         "created_at": workflow.created_at,
         "workflow_definition": mask_workflow_definition(workflow_definition),
         "current_definition_id": workflow.current_definition_id,
+        "draft_definition_id": None,
         "template_context_variables": workflow.template_context_variables,
         "call_disposition_codes": workflow.call_disposition_codes,
         "workflow_configurations": mask_workflow_configurations(
@@ -799,6 +808,7 @@ async def get_workflow(
         "created_at": workflow.created_at,
         "workflow_definition": mask_workflow_definition(workflow_def),
         "current_definition_id": workflow.current_definition_id,
+        "draft_definition_id": draft.id if draft else None,
         "template_context_variables": template_vars,
         "call_disposition_codes": workflow.call_disposition_codes,
         "workflow_configurations": mask_workflow_configurations(workflow_configs),
@@ -852,6 +862,7 @@ async def get_workflow_versions(
 @router.post("/{workflow_id}/publish")
 async def publish_workflow(
     workflow_id: int,
+    request: PublishWorkflowRequest | None = None,
     user: UserModel = Depends(get_user_with_selected_organization),
 ):
     """Publish the current draft version of a workflow.
@@ -868,6 +879,21 @@ async def publish_workflow(
             status_code=404, detail=f"Workflow with id {workflow_id} not found"
         )
 
+    expected_definition_id = request.expected_definition_id if request else None
+    if (
+        expected_definition_id is not None
+        and workflow.released_definition_id == expected_definition_id
+        and workflow.released_definition is not None
+    ):
+        published = workflow.released_definition
+        return {
+            "id": published.id,
+            "released_definition_id": published.id,
+            "version_number": published.version_number,
+            "status": published.status,
+            "published_at": published.published_at,
+        }
+
     draft = await db_client.get_draft_version(workflow_id)
     if draft is None:
         raise HTTPException(status_code=400, detail="No draft to publish")
@@ -881,9 +907,16 @@ async def publish_workflow(
         raise _validation_errors_http_exception(errors)
 
     try:
-        published = await db_client.publish_workflow_draft(workflow_id)
+        published = await db_client.publish_workflow_draft(
+            workflow_id,
+            expected_definition_id=expected_definition_id,
+        )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        detail = str(e)
+        raise HTTPException(
+            status_code=409 if detail.startswith("Publish conflict:") else 400,
+            detail=detail,
+        )
 
     capture_event(
         distinct_id=str(user.provider_id),
@@ -897,6 +930,7 @@ async def publish_workflow(
 
     return {
         "id": published.id,
+        "released_definition_id": published.id,
         "version_number": published.version_number,
         "status": published.status,
         "published_at": published.published_at,
@@ -1317,6 +1351,7 @@ async def update_workflow(
             "created_at": workflow.created_at,
             "workflow_definition": mask_workflow_definition(workflow_def),
             "current_definition_id": workflow.current_definition_id,
+            "draft_definition_id": draft.id if draft else None,
             "template_context_variables": template_vars,
             "call_disposition_codes": workflow.call_disposition_codes,
             "workflow_configurations": mask_workflow_configurations(workflow_configs),
@@ -1692,6 +1727,7 @@ async def duplicate_workflow_template(
         "created_at": workflow.created_at,
         "workflow_definition": mask_workflow_definition(workflow_def),
         "current_definition_id": workflow.current_definition_id,
+        "draft_definition_id": draft.id if draft else None,
         "template_context_variables": workflow.template_context_variables,
         "call_disposition_codes": workflow.call_disposition_codes,
         "workflow_configurations": mask_workflow_configurations(

@@ -18,6 +18,7 @@ import pytest
 from api.db.models import (
     OrganizationModel,
     UserModel,
+    WorkflowDefinitionModel,
 )
 
 # Sample workflow definitions (graph JSON)
@@ -285,6 +286,77 @@ class TestPublishDraft:
 
         with pytest.raises(ValueError, match="[Nn]o draft"):
             await db_session.publish_workflow_draft(workflow.id)
+
+    async def test_expected_definition_publishes_exact_draft(
+        self, db_session, workflow_with_v1
+    ):
+        workflow, _ = workflow_with_v1
+        draft = await db_session.save_workflow_draft(
+            workflow_id=workflow.id, workflow_definition=GRAPH_V2
+        )
+
+        published = await db_session.publish_workflow_draft(
+            workflow.id, expected_definition_id=draft.id
+        )
+
+        assert published.id == draft.id
+        assert published.status == "published"
+
+    async def test_expected_definition_retry_is_idempotent(
+        self, db_session, workflow_with_v1
+    ):
+        workflow, _ = workflow_with_v1
+        draft = await db_session.save_workflow_draft(
+            workflow_id=workflow.id, workflow_definition=GRAPH_V2
+        )
+        first = await db_session.publish_workflow_draft(
+            workflow.id, expected_definition_id=draft.id
+        )
+        retry = await db_session.publish_workflow_draft(
+            workflow.id, expected_definition_id=draft.id
+        )
+
+        assert retry.id == first.id == draft.id
+        assert retry.status == "published"
+
+    async def test_stale_expected_definition_conflicts(
+        self, db_session, workflow_with_v1
+    ):
+        workflow, _ = workflow_with_v1
+        draft = await db_session.save_workflow_draft(
+            workflow_id=workflow.id, workflow_definition=GRAPH_V2
+        )
+        await db_session.publish_workflow_draft(
+            workflow.id, expected_definition_id=draft.id
+        )
+
+        with pytest.raises(ValueError, match="Publish conflict"):
+            await db_session.publish_workflow_draft(
+                workflow.id, expected_definition_id=draft.id + 999999
+            )
+
+    async def test_competing_draft_cannot_be_published_wrongly(
+        self, db_session, workflow_with_v1
+    ):
+        workflow, _ = workflow_with_v1
+        expected = await db_session.save_workflow_draft(
+            workflow_id=workflow.id, workflow_definition=GRAPH_V2
+        )
+        async with db_session.async_session() as session:
+            competing = WorkflowDefinitionModel(
+                workflow_id=workflow.id,
+                workflow_json=GRAPH_V3,
+                status="draft",
+                version_number=3,
+                is_current=False,
+            )
+            session.add(competing)
+            await session.commit()
+
+        with pytest.raises(ValueError, match="another draft"):
+            await db_session.publish_workflow_draft(
+                workflow.id, expected_definition_id=expected.id
+            )
 
     async def test_exactly_one_published_after_multiple_cycles(
         self, db_session, workflow_with_v1

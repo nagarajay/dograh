@@ -734,6 +734,9 @@ class WorkflowResponse(BaseModel):
     created_at: Annotated[AwareDatetime, Field(title='Created At')]
     workflow_definition: Annotated[dict[str, Any], Field(title='Workflow Definition')]
     current_definition_id: Annotated[int | None, Field(title='Current Definition Id')]
+    draft_definition_id: Annotated[int | None, Field(title='Draft Definition Id')] = (
+        None
+    )
     template_context_variables: Annotated[
         dict[str, Any] | None, Field(title='Template Context Variables')
     ] = None
