@@ -74,6 +74,13 @@ class StartCall(TypedNode):
     Pre-recorded audio file played at the start of the call.
     """
 
+    wait_for_user_after_greeting: bool = False
+    """
+    When true, the agent plays the greeting and then stays silent until the
+    caller speaks, instead of generating its own first turn straight after
+    the greeting. Has no effect when no greeting is configured.
+    """
+
     allow_interrupt: bool = False
     """
     When true, the user can interrupt the agent mid-utterance.

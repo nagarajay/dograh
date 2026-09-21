@@ -215,6 +215,7 @@ class _ToolDocumentRefsMixin(BaseModel):
         "greeting_type",
         "greeting",
         "greeting_recording_id",
+        "wait_for_user_after_greeting",
         "prompt",
         "allow_interrupt",
         "add_global_prompt",
@@ -272,6 +273,15 @@ class _ToolDocumentRefsMixin(BaseModel):
                 "MCP tool to discover available recordings."
             ),
             "display_options": DisplayOptions(show={"greeting_type": ["audio"]}),
+        },
+        "wait_for_user_after_greeting": {
+            "display_name": "Wait for Caller After Greeting",
+            "description": (
+                "When true, the agent plays the greeting and then stays silent "
+                "until the caller speaks, instead of generating its own first "
+                "turn straight after the greeting. Has no effect when no "
+                "greeting is configured."
+            ),
         },
         "allow_interrupt": {
             "description": "When true, the user can interrupt the agent mid-utterance.",
@@ -347,6 +357,9 @@ class StartCallNodeData(
     )
     greeting_recording_id: Optional[str] = spec_field(
         default=None, ui_type=PropertyType.recording_ref
+    )
+    wait_for_user_after_greeting: bool = spec_field(
+        default=False, ui_type=PropertyType.boolean
     )
     delayed_start: bool = spec_field(default=False, ui_type=PropertyType.boolean)
     delayed_start_duration: Optional[float] = spec_field(

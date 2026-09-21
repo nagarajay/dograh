@@ -48,6 +48,10 @@ export interface StartCall {
      */
     greeting_recording_id?: string;
     /**
+     * When true, the agent plays the greeting and then stays silent until the caller speaks, instead of generating its own first turn straight after the greeting. Has no effect when no greeting is configured.
+     */
+    wait_for_user_after_greeting?: boolean;
+    /**
      * Agent system prompt for the opening turn. Supports {{template_variables}} from pre-call fetch and the initial context.
      */
     prompt: string;

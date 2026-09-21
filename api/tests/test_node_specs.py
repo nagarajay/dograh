@@ -303,6 +303,7 @@ def test_all_registered_node_models_inherit_base_node_data():
                 "greeting_type",
                 "greeting",
                 "greeting_recording_id",
+                "wait_for_user_after_greeting",
                 "prompt",
                 "allow_interrupt",
                 "add_global_prompt",

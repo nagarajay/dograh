@@ -873,6 +873,9 @@ class PipecatEngine:
                 until the caller speaks. Nodes reached by a transition already
                 get their generation from the function call result, so passing
                 this for them would make every greeted node speak twice.
+                Ignored when the node sets ``wait_for_user_after_greeting``:
+                the greeting still plays, but nothing is generated after it,
+                so the bot stays silent until the caller speaks.
 
         Returns:
             "greeting" when a text/audio greeting was queued,
@@ -880,6 +883,10 @@ class PipecatEngine:
             "none" when nothing was queued.
         """
         if previous_node_id != node_id:
+            node = self.workflow.nodes.get(node_id)
+            if node is not None and node.wait_for_user_after_greeting:
+                generate_after_greeting = False
+
             greeting_info = self.get_node_greeting(node_id)
             if greeting_info:
                 greeting_type, greeting_value = greeting_info

@@ -129,6 +129,9 @@ class Node:
         self.greeting = getattr(data, "greeting", None)
         self.greeting_type = getattr(data, "greeting_type", None)
         self.greeting_recording_id = getattr(data, "greeting_recording_id", None)
+        self.wait_for_user_after_greeting = getattr(
+            data, "wait_for_user_after_greeting", False
+        )
         self.delayed_start = getattr(data, "delayed_start", False)
         self.delayed_start_duration = getattr(data, "delayed_start_duration", None)
         self.tool_uuids = getattr(data, "tool_uuids", None)
