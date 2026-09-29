@@ -3,6 +3,7 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 import { getTelephonyConfigWarningsApiV1OrganizationsTelephonyConfigWarningsGet } from '@/client/sdk.gen';
+import { useOrgConfig } from '@/context/OrgConfigContext';
 import { useAuth } from '@/lib/auth';
 
 interface TelephonyConfigWarningsContextType {
@@ -25,6 +26,7 @@ const TelephonyConfigWarningsContext = createContext<TelephonyConfigWarningsCont
 // change. Page-level callers invalidate via refresh() after a save.
 export function TelephonyConfigWarningsProvider({ children }: { children: ReactNode }) {
     const auth = useAuth();
+    const { hasOrganization } = useOrgConfig();
     const [telnyxCount, setTelnyxCount] = useState(0);
     const [vonageCount, setVonageCount] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -45,15 +47,17 @@ export function TelephonyConfigWarningsProvider({ children }: { children: ReactN
     }, []);
 
     useEffect(() => {
-        if (auth.loading || !auth.isAuthenticated || hasFetched.current) return;
+        // The warnings are organisation-scoped; a platform account with no
+        // organisation has none to fetch.
+        if (auth.loading || !auth.isAuthenticated || !hasOrganization || hasFetched.current) return;
         hasFetched.current = true;
         doFetch();
-    }, [auth.loading, auth.isAuthenticated, doFetch]);
+    }, [auth.loading, auth.isAuthenticated, hasOrganization, doFetch]);
 
     const refresh = useCallback(async () => {
-        if (!auth.isAuthenticated) return;
+        if (!auth.isAuthenticated || !hasOrganization) return;
         await doFetch();
-    }, [auth.isAuthenticated, doFetch]);
+    }, [auth.isAuthenticated, hasOrganization, doFetch]);
 
     return (
         <TelephonyConfigWarningsContext.Provider

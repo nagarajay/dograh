@@ -31,6 +31,12 @@ interface OrgConfigContextType {
     organizationPricing: OrganizationPricing | null;
     organizationPreferences: OrganizationPreferences | null;
     externalPbxIntegrationsEnabled: boolean;
+    /**
+     * True only once the backend has confirmed the caller has an authorised
+     * organisation context. A platform super-admin has none, and that is a
+     * valid state: organisation-scoped requests must not be sent for them.
+     */
+    hasOrganization: boolean;
 }
 
 const OrgConfigContext = createContext<OrgConfigContextType | null>(null);
@@ -106,18 +112,33 @@ export function OrgConfigProvider({ children }: { children: ReactNode }) {
 
         setLoading(true);
         try {
-            const [orgContextResponse, userConfigResponse, preferencesResponse] = await Promise.all([
-                getCurrentOrganizationContextApiV1OrganizationsContextGet(),
+            // The organisation context is the one call that is valid with no
+            // organisation. It tells us whether the organisation-scoped calls
+            // below are authorised at all, so it goes first.
+            const orgContextResponse = await getCurrentOrganizationContextApiV1OrganizationsContextGet();
+
+            if (orgContextResponse.data) {
+                setOrgContext(orgContextResponse.data);
+            }
+
+            if (orgContextResponse.data && orgContextResponse.data.organization_id == null) {
+                // Platform-level account (for example a super-admin): there is
+                // nothing organisation-scoped to load, and asking would only
+                // produce "No organization selected".
+                setUserConfig(null);
+                setOrganizationPricing(null);
+                setOrganizationPreferences(null);
+                setError(null);
+                return;
+            }
+
+            const [userConfigResponse, preferencesResponse] = await Promise.all([
                 getUserConfigurationsApiV1UserConfigurationsUserGet(),
                 getPreferencesApiV1OrganizationsPreferencesGet(),
             ]);
 
             if (preferencesResponse.error) {
                 throw new Error(detailFromError(preferencesResponse.error, 'Failed to load organization preferences'));
-            }
-
-            if (orgContextResponse.data) {
-                setOrgContext(orgContextResponse.data);
             }
 
             if (userConfigResponse.data) {
@@ -163,6 +184,7 @@ export function OrgConfigProvider({ children }: { children: ReactNode }) {
                 organizationPreferences,
                 externalPbxIntegrationsEnabled:
                     organizationPreferences?.external_pbx_integrations_enabled ?? false,
+                hasOrganization: !loading && orgContext?.organization_id != null,
             }}
         >
             {children}

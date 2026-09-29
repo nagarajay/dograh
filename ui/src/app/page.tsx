@@ -1,7 +1,7 @@
 import { isNextRouterError } from "next/dist/client/components/is-next-router-error";
 import { redirect } from "next/navigation";
 
-import { getWorkflowCountApiV1WorkflowCountGet } from "@/client/sdk.gen";
+import { getAuthUserApiV1UserAuthUserGet, getWorkflowCountApiV1WorkflowCountGet } from "@/client/sdk.gen";
 import { getServerAccessToken,getServerAuthProvider,getServerUser } from "@/lib/auth/server";
 import logger from '@/lib/logger';
 import { getRedirectUrl } from "@/lib/utils";
@@ -20,6 +20,20 @@ export default async function Home() {
     try {
       const accessToken = await getServerAccessToken();
       if (accessToken) {
+        // A platform super-admin belongs to no organization on purpose, so the
+        // organization-scoped workflow count below is refused for them. Their
+        // home is the super-admin console, as after sign-in.
+        const authUserResponse = await getAuthUserApiV1UserAuthUserGet({
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        const authUser = authUserResponse.data;
+        if (authUser?.is_superuser && !authUser?.selected_organization_id) {
+          logger.debug('[HomePage] Redirecting to /superadmin/organizations - platform super-admin with no organization');
+          redirect('/superadmin/organizations');
+        }
+
         const countResponse = await getWorkflowCountApiV1WorkflowCountGet({
           headers: {
             Authorization: `Bearer ${accessToken}`,

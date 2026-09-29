@@ -90,3 +90,88 @@ describe('OrgConfigProvider', () => {
         expect(screen.getByTestId('error').textContent).toBe('Preferences unavailable');
     });
 });
+
+describe('OrgConfigProvider without an organisation', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        useAuthMock.mockReturnValue({
+            user: { id: 'super-1', provider: 'local' },
+            isAuthenticated: true,
+            loading: false,
+            getAccessToken: vi.fn(async () => 'token'),
+            redirectToLogin: vi.fn(),
+            logout: vi.fn(async () => undefined),
+            provider: 'local',
+        });
+        getCurrentOrganizationContextMock.mockResolvedValue({
+            data: {
+                organization_id: null,
+                organization_provider_id: null,
+                model_services: {
+                    config_source: 'empty',
+                    has_model_configuration_v2: false,
+                    managed_service_version: null,
+                    uses_managed_service_v2: false,
+                },
+            },
+            error: undefined,
+        });
+    });
+
+    function State() {
+        const { error, loading, hasOrganization } = useOrgConfig();
+        return (
+            <div>
+                <span data-testid="loading">{String(loading)}</span>
+                <span data-testid="error">{error?.message ?? ''}</span>
+                <span data-testid="has-org">{String(hasOrganization)}</span>
+            </div>
+        );
+    }
+
+    it('treats a platform account as valid and sends no organisation-scoped request', async () => {
+        render(
+            <OrgConfigProvider>
+                <State />
+            </OrgConfigProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('loading').textContent).toBe('false');
+        });
+        expect(screen.getByTestId('has-org').textContent).toBe('false');
+        expect(screen.getByTestId('error').textContent).toBe('');
+        expect(getUserConfigurationsMock).not.toHaveBeenCalled();
+        expect(getPreferencesMock).not.toHaveBeenCalled();
+    });
+
+    it('still loads organisation configuration when an organisation is authorised', async () => {
+        getCurrentOrganizationContextMock.mockResolvedValue({
+            data: {
+                organization_id: 7,
+                organization_provider_id: null,
+                model_services: {
+                    config_source: 'empty',
+                    has_model_configuration_v2: false,
+                    managed_service_version: null,
+                    uses_managed_service_v2: false,
+                },
+            },
+            error: undefined,
+        });
+        getUserConfigurationsMock.mockResolvedValue({ data: {}, error: undefined });
+        getPreferencesMock.mockResolvedValue({ data: {}, error: undefined });
+
+        render(
+            <OrgConfigProvider>
+                <State />
+            </OrgConfigProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('has-org').textContent).toBe('true');
+        });
+        expect(getUserConfigurationsMock).toHaveBeenCalledTimes(1);
+        expect(getPreferencesMock).toHaveBeenCalledTimes(1);
+    });
+});

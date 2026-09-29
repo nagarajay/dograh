@@ -10,6 +10,7 @@ import type { LeadSource } from "@/components/lead-forms/leadFieldOptions";
 import { OnboardingModal } from "@/components/lead-forms/OnboardingModal";
 import { PostHogEvent } from "@/constants/posthog-events";
 import { useOnboarding } from "@/context/OnboardingContext";
+import { useOrgConfig } from "@/context/OrgConfigContext";
 import { useAuth } from "@/lib/auth";
 import { trackMetaCompleteRegistration } from "@/lib/metaPixel";
 
@@ -38,6 +39,7 @@ export function LeadFormsProvider({ children }: { children: ReactNode }) {
   //   (b) the user has zero workflows (grandfathers out all existing users —
   //       they already have workflows, so they never see this modal).
   const { user, loading: authLoading } = useAuth();
+  const { hasOrganization } = useOrgConfig();
   const {
     loading: onboardingLoading,
     onboardingCompletedAt,
@@ -52,7 +54,16 @@ export function LeadFormsProvider({ children }: { children: ReactNode }) {
   onboardingDoneRef.current = Boolean(onboardingCompletedAt) || onboardingSkipped;
 
   useEffect(() => {
-    if (authLoading || onboardingLoading || !user || onboardingCheckedRef.current) {
+    // The workflow count is organisation-scoped. A platform account with no
+    // organisation has no workflows to count, so it never sees the new-user
+    // form and never sends the request.
+    if (
+      authLoading ||
+      onboardingLoading ||
+      !user ||
+      !hasOrganization ||
+      onboardingCheckedRef.current
+    ) {
       return;
     }
 
@@ -81,7 +92,7 @@ export function LeadFormsProvider({ children }: { children: ReactNode }) {
         // existing users are never disrupted.
       }
     })();
-  }, [authLoading, onboardingLoading, user]);
+  }, [authLoading, onboardingLoading, user, hasOrganization]);
 
   const completeOnboarding = useCallback((skipped: boolean) => {
     // Dismiss immediately, then persist the flag through OnboardingContext

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { getDispositionCodesApiV1OrganizationsDispositionCodesGet } from "@/client/sdk.gen";
+import { useOrgConfig } from "@/context/OrgConfigContext";
 import { detailFromError } from "@/lib/apiError";
 import { useAuth } from "@/lib/auth";
 
@@ -26,13 +27,21 @@ export function useDispositionCodes(): {
     isLoading: boolean;
 } {
     const { user, loading: authLoading } = useAuth();
+    const { hasOrganization, loading: orgLoading } = useOrgConfig();
     const [codes, setCodes] = useState<string[]>([]);
     const [endTaskReasonCodes, setEndTaskReasonCodes] = useState<string[]>([]);
     const [systemCodes, setSystemCodes] = useState<string[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        if (authLoading || !user) return;
+        if (authLoading || orgLoading || !user) return;
+
+        // The catalog is served per organisation. A platform account with no
+        // organisation has none, and must not ask for one.
+        if (!hasOrganization) {
+            setIsLoading(false);
+            return;
+        }
 
         let active = true;
         setIsLoading(true);
@@ -60,7 +69,7 @@ export function useDispositionCodes(): {
         return () => {
             active = false;
         };
-    }, [authLoading, user]);
+    }, [authLoading, orgLoading, hasOrganization, user]);
 
     return { codes, endTaskReasonCodes, systemCodes, isLoading };
 }
