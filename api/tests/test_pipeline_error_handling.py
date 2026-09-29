@@ -3,8 +3,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from pipecat.frames.frames import ErrorFrame
+from pipecat.pipeline.worker import ProcessorUnusablePolicy
 from pipecat.utils.enums import EndTaskReason
 
+from api.services.pipecat import pipeline_builder
 from api.services.pipecat.event_handlers import register_event_handlers
 from api.services.pipecat.termination_funnel_processor import (
     TerminationFunnelProcessor,
@@ -21,6 +23,25 @@ class _EventSource:
             return handler
 
         return decorator
+
+
+def test_dograh_workers_cancel_when_a_processor_becomes_permanently_unusable(
+    monkeypatch,
+):
+    captured = {}
+    worker = SimpleNamespace(turn_tracking_observer=None)
+
+    def capture_worker(*args, **kwargs):
+        captured.update(kwargs)
+        return worker
+
+    monkeypatch.setenv("ENABLE_TURN_LOGGING", "false")
+    monkeypatch.setattr(pipeline_builder, "PipelineWorker", capture_worker)
+
+    result = pipeline_builder.create_pipeline_task(object(), workflow_run_id=88)
+
+    assert result is worker
+    assert captured["processor_unusable_policy"] is ProcessorUnusablePolicy.CANCEL
 
 
 @pytest.mark.asyncio
@@ -93,6 +114,47 @@ async def test_fatal_pipeline_error_still_ends_call(monkeypatch):
         task,
         ErrorFrame("unrecoverable failure", fatal=True),
     )
+
+    engine.end_call_with_reason.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_an_error_that_leaves_its_service_unusable_ends_call(monkeypatch):
+    """The input transport's errors never reach the funnel, so this handler
+    has to recognise the same verdict the funnel does."""
+    task = _EventSource()
+    transport = _EventSource()
+    engine = SimpleNamespace(end_call_with_reason=AsyncMock())
+    audio_buffer = SimpleNamespace(
+        start_recording=AsyncMock(),
+        stop_recording=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "api.services.pipecat.event_handlers.db_client.get_workflow_run_by_id",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "api.services.pipecat.event_handlers._capture_call_event",
+        AsyncMock(),
+    )
+
+    register_event_handlers(
+        task=task,
+        transport=transport,
+        workflow_run_id=88,
+        engine=engine,
+        audio_buffer=audio_buffer,
+        in_memory_logs_buffer=SimpleNamespace(),
+        transcript_log_coordinator=SimpleNamespace(),
+        pipeline_metrics_aggregator=SimpleNamespace(),
+        termination_funnel=TerminationFunnelProcessor(),
+        audio_config=SimpleNamespace(pipeline_sample_rate=16000),
+    )
+
+    error = ErrorFrame("STT service quota exceeded")
+    error.processor = SimpleNamespace(is_usable=False)
+
+    await task.handlers["on_pipeline_error"](task, error)
 
     engine.end_call_with_reason.assert_awaited_once()
 

@@ -14,6 +14,7 @@ or LLM, so they are deterministic.
 """
 
 import asyncio
+from types import SimpleNamespace
 import time
 
 import pytest
@@ -135,7 +136,9 @@ class _Commits:
 
 async def _speech_timeout_strategy(task_manager):
     strategy = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=TIMEOUT)
-    await strategy.setup(task_manager)
+    await strategy.setup(
+        SimpleNamespace(task_manager=task_manager, audio_in_sample_rate=16000)
+    )
     # A zero STT budget leaves the speech timeout as the only wait, so any extra
     # delay would be the application's.
     await strategy.process_frame(
@@ -228,7 +231,9 @@ class _FakeAnalyzer(BaseTurnAnalyzer):
 async def _analyzer_strategy(task_manager, verdict):
     analyzer = _FakeAnalyzer(verdict)
     strategy = TurnAnalyzerUserTurnStopStrategy(turn_analyzer=analyzer)
-    await strategy.setup(task_manager)
+    await strategy.setup(
+        SimpleNamespace(task_manager=task_manager, audio_in_sample_rate=16000)
+    )
     return strategy, analyzer
 
 
