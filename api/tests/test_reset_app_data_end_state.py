@@ -174,6 +174,190 @@ async def test_preserved_user_configuration_keys_survive(raw_conn):
 
 
 @pytest.mark.asyncio
+async def test_no_owner_leaves_no_users_at_all(raw_conn):
+    """--no-owner is a database with nothing in it, super-admin included.
+
+    Preserving an identity and preserving none are different requests. This is
+    the second one: the super-admin is re-created afterwards by
+    scripts/bootstrap_superadmin.py, so a row left behind here is not a
+    convenience, it is an account nobody asked to keep.
+    """
+    await _seed(raw_conn)
+
+    await reset_app_data.apply_reset(raw_conn, owner_id=None, clear_tables=[])
+
+    assert await raw_conn.fetchval("SELECT count(*) FROM public.users") == 0
+    assert await raw_conn.fetchval("SELECT count(*) FROM public.organizations") == 0
+    assert (
+        await raw_conn.fetchval("SELECT count(*) FROM public.organization_users") == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_owner_clears_every_user_configuration(raw_conn):
+    """Including the keys a preserved owner would have kept.
+
+    ONBOARDING is account state, and with no account it is state belonging to
+    nobody -- and it has a foreign key into users, so leaving it would fail the
+    delete rather than merely look untidy.
+    """
+    seeded = await _seed(raw_conn)
+    await raw_conn.executemany(
+        "INSERT INTO public.user_configurations (user_id, key, configuration) "
+        "VALUES ($1, $2, $3::json)",
+        [
+            (seeded["owner_id"], "ONBOARDING", "{}"),
+            (seeded["client_user_id"], "MODEL_CONFIGURATION", '{"secret": "byok"}'),
+        ],
+    )
+
+    await reset_app_data.apply_reset(raw_conn, owner_id=None, clear_tables=[])
+
+    assert (
+        await raw_conn.fetchval("SELECT count(*) FROM public.user_configurations") == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_owner_restarts_the_user_sequence(raw_conn):
+    """A database with no users hands out id 1 to the next one.
+
+    The super-admin bootstrapped after this reset should be user 1, not user
+    402: an id that carries over from deleted rows is the clearest sign that a
+    "clean" database is not one.
+    """
+    await _seed(raw_conn)
+
+    await reset_app_data.apply_reset(raw_conn, owner_id=None, clear_tables=[])
+
+    first_user = await raw_conn.fetchval(
+        "INSERT INTO public.users (provider_id, email, is_superuser, created_at) "
+        "VALUES ('oss-fresh', 'fresh@example.com', true, now()) RETURNING id"
+    )
+    assert first_user == 1
+
+
+@pytest.mark.asyncio
+async def test_service_key_creators_are_the_members_of_managed_organizations(raw_conn):
+    """Keys are minted under the tenant's own identity, not one platform account.
+
+    Super-admin provisioning mints each organization's key with that
+    organization's service user as created_by, and MPS scopes an OSS key
+    listing by exactly that value. Looking under a single identity would find
+    none of the other tenants' keys, and the archival step would then abort the
+    reset on every one of them.
+    """
+    seeded = await _seed(raw_conn)
+    await raw_conn.execute(
+        "INSERT INTO public.organization_configurations "
+        "(organization_id, key, value, created_at, updated_at) "
+        "VALUES ($1, 'MODEL_CONFIGURATION_V2', $2::json, now(), now())",
+        seeded["client_org"],
+        '{"mode": "dograh", "dograh": {"api_key": "oss_sk_live"}}',
+    )
+
+    creators = await reset_app_data.resolve_managed_service_key_creators(raw_conn)
+
+    # The client organization's member, not the owner of the other organization.
+    assert creators == ["oss-client"]
+
+
+@pytest.mark.asyncio
+async def test_a_database_without_a_vault_reports_none_rather_than_failing(raw_conn):
+    """A container-local Postgres has no vault schema, and that is not an error."""
+    present = await reset_app_data.count_vault_secrets(raw_conn)
+
+    assert present is None
+    assert await reset_app_data.purge_vault_secrets(raw_conn) == 0
+
+
+class TestPurgeStorageTarget:
+    """Emptying a bucket: every object, in batches, failing loudly."""
+
+    TARGET = None
+
+    @staticmethod
+    def _target():
+        return reset_app_data.StorageTarget(
+            label="s3",
+            bucket="dograh-bucket",
+            endpoint_url="https://ref.storage.supabase.co/storage/v1/s3",
+            region="ap-south-1",
+            access_key="id",
+            secret_key="secret",
+            signature_version="s3v4",
+            addressing_style="path",
+        )
+
+    @staticmethod
+    def _fake_client(monkeypatch, *, keys, errors=None):
+        deleted: list[list[str]] = []
+
+        class FakeClient:
+            def list_objects_v2(self, **kwargs):
+                # One page per 1000 keys, the way S3 actually answers.
+                start = int(kwargs.get("ContinuationToken") or 0)
+                page = keys[start : start + 1000]
+                truncated = start + 1000 < len(keys)
+                return {
+                    "Contents": [{"Key": k} for k in page],
+                    "IsTruncated": truncated,
+                    "NextContinuationToken": str(start + 1000),
+                }
+
+            def delete_object(self, **kwargs):
+                key = kwargs["Key"]
+                if errors and key in errors:
+                    raise RuntimeError(errors[key])
+                deleted.append(key)
+                return {}
+
+        monkeypatch.setattr(
+            reset_app_data, "_storage_client", lambda target: FakeClient()
+        )
+        return deleted
+
+    def test_deletes_every_object_across_pages(self, monkeypatch):
+        # More than one listing page, because a bucket that answers in pages is
+        # the case where a purge silently stops early.
+        keys = [f"recordings/{i}.wav" for i in range(2500)]
+        deleted = self._fake_client(monkeypatch, keys=keys)
+
+        assert reset_app_data.purge_storage_target(self._target()) == 2500
+
+        assert deleted == keys
+
+    def test_an_empty_bucket_deletes_nothing(self, monkeypatch):
+        deleted = self._fake_client(monkeypatch, keys=[])
+
+        assert reset_app_data.purge_storage_target(self._target()) == 0
+        assert deleted == []
+
+    def test_a_failed_delete_is_not_reported_as_a_purge(self, monkeypatch):
+        # Reporting "storage is empty" while objects remain is the one outcome
+        # a reset must never produce.
+        self._fake_client(
+            monkeypatch,
+            keys=["recordings/1.wav"],
+            errors={"recordings/1.wav": "AccessDenied"},
+        )
+
+        with pytest.raises(SystemExit, match="AccessDenied"):
+            reset_app_data.purge_storage_target(self._target())
+
+    def test_an_unreachable_bucket_is_reported_not_raised(self, monkeypatch):
+        def boom(target):
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(reset_app_data, "_storage_client", boom)
+
+        count, reason = reset_app_data.inspect_storage_target(self._target())
+
+        assert count is None
+        assert "connection refused" in reason
+
+
+@pytest.mark.asyncio
 async def test_resolve_owner_refuses_a_user_who_is_not_a_super_admin(raw_conn):
     """A reset ends with no organization, which only a super-admin can use."""
     await _seed(raw_conn, owner_is_superuser=False)
@@ -312,16 +496,55 @@ class TestArchiveManagedServiceKeys:
         )
 
         await reset_app_data.archive_managed_service_keys(
-            ["oss_sk_BBBrestofkey"], created_by="oss-owner"
+            ["oss_sk_BBBrestofkey"], created_by=["oss-owner"]
         )
 
         assert archived == [2]
 
     @pytest.mark.asyncio
+    async def test_searches_every_creator_and_archives_under_the_right_one(
+        self, monkeypatch
+    ):
+        """OSS key listings are scoped per creator, so one listing is not enough.
+
+        Each tenant's key was minted under that tenant's own service user. A
+        reset that looked only under one identity would fail to find the rest
+        and abort on "found 0" for every other organization.
+        """
+        from api.services import mps_service_key_client as module
+
+        by_creator = {
+            "oss-tenant-a": [{"id": 1, "key_prefix": "oss_sk_AAA"}],
+            "oss-tenant-b": [{"id": 2, "key_prefix": "oss_sk_BBB"}],
+        }
+        archived: list[tuple[int, str]] = []
+
+        async def get_service_keys(organization_id=None, created_by=None, **_):
+            return by_creator.get(created_by, [])
+
+        async def archive_service_key(key_id, organization_id=None, created_by=None):
+            archived.append((key_id, created_by))
+            return True
+
+        monkeypatch.setattr(
+            module.mps_service_key_client, "get_service_keys", get_service_keys
+        )
+        monkeypatch.setattr(
+            module.mps_service_key_client, "archive_service_key", archive_service_key
+        )
+
+        await reset_app_data.archive_managed_service_keys(
+            ["oss_sk_AAArest", "oss_sk_BBBrest"],
+            created_by=["oss-tenant-a", "oss-tenant-b"],
+        )
+
+        assert archived == [(1, "oss-tenant-a"), (2, "oss-tenant-b")]
+
+    @pytest.mark.asyncio
     async def test_no_keys_means_no_calls(self, monkeypatch):
         archived = self._client(monkeypatch, existing=[{"id": 1, "key_prefix": "x"}])
 
-        await reset_app_data.archive_managed_service_keys([], created_by="oss-owner")
+        await reset_app_data.archive_managed_service_keys([], created_by=["oss-owner"])
 
         assert archived == []
 
@@ -331,7 +554,7 @@ class TestArchiveManagedServiceKeys:
 
         with pytest.raises(SystemExit, match="found 0"):
             await reset_app_data.archive_managed_service_keys(
-                ["oss_sk_ZZZ"], created_by="oss-owner"
+                ["oss_sk_ZZZ"], created_by=["oss-owner"]
             )
 
     @pytest.mark.asyncio
@@ -346,7 +569,7 @@ class TestArchiveManagedServiceKeys:
 
         with pytest.raises(SystemExit, match="found 2"):
             await reset_app_data.archive_managed_service_keys(
-                ["oss_sk_AAA"], created_by="oss-owner"
+                ["oss_sk_AAA"], created_by=["oss-owner"]
             )
 
     @pytest.mark.asyncio
@@ -359,7 +582,7 @@ class TestArchiveManagedServiceKeys:
 
         with pytest.raises(SystemExit, match="refused to archive"):
             await reset_app_data.archive_managed_service_keys(
-                ["oss_sk_AAAkey"], created_by="oss-owner"
+                ["oss_sk_AAAkey"], created_by=["oss-owner"]
             )
 
     @pytest.mark.asyncio
@@ -372,7 +595,7 @@ class TestArchiveManagedServiceKeys:
 
         with pytest.raises(SystemExit, match="Nothing was deleted"):
             await reset_app_data.archive_managed_service_keys(
-                ["oss_sk_AAAkey"], created_by="oss-owner"
+                ["oss_sk_AAAkey"], created_by=["oss-owner"]
             )
 
     @pytest.mark.asyncio
@@ -386,5 +609,5 @@ class TestArchiveManagedServiceKeys:
 
         with pytest.raises(SystemExit, match="could not list MPS service keys"):
             await reset_app_data.archive_managed_service_keys(
-                ["oss_sk_AAAkey"], created_by="oss-owner"
+                ["oss_sk_AAAkey"], created_by=["oss-owner"]
             )

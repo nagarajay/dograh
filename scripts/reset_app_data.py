@@ -13,6 +13,21 @@ safety property, not a formality: a reset leaves the surviving user with
 Preserving an ordinary user would leave an account that can authenticate but
 cannot reach a single organization-scoped route.
 
+``--no-owner`` is the other shape of the same reset: no identity is preserved
+at all, so the ``users`` table ends empty and the super-admin is re-created
+afterwards with ``scripts/bootstrap_superadmin.py``. It exists because
+"preserve exactly this account" and "start from nothing" are different
+requests, and the second one was previously impossible to express -- the
+closest approximation left one account behind that nobody had asked to keep.
+Exactly one of ``--owner-email`` and ``--no-owner`` must be given: which
+identities survive a reset is never a default.
+
+``--purge-storage`` extends the same run to the object storage the deployment
+is configured against, because a database with no workflow rows and a bucket
+still holding that workflow's recordings is not a clean state, only a confusing
+one. Storage is purged after the database transaction commits: a purge that
+runs first would destroy files for a reset that then failed.
+
 
 Target database comes from ``DATABASE_URL`` only. There is no fallback and no
 hard-coded host, so the script always follows whatever database the running
@@ -57,14 +72,20 @@ What never survives:
 
 Every table in ``CLEAR_TABLES`` is emptied, including API keys, telephony and
 provider configuration rows that belong to the preserved owner. The intent is
-"keep the identity, drop the operational state".
+"keep the identity, drop the operational state" -- or, under ``--no-owner``,
+"drop both".
 
 Both the clear list and the preserve list are explicit. Table discovery at
 runtime is used only to validate them: if the ``public`` schema contains a
 table classified as neither, the script aborts and names it, so a future
 migration cannot cause new state to be wiped without review.
 
-Non-``public`` schemas are never touched.
+Non-``public`` schemas are left alone with one exception: ``vault.secrets``,
+the Supabase Vault, is emptied too. Vault rows are Dograh-owned secrets keyed
+to tenants that no longer exist after a reset, and a secret nothing references
+is exactly the kind of surviving credential this script exists to remove. A
+project whose ``vault`` schema is absent is reported and skipped rather than
+failed.
 
 Usage (dry run is the default -- it only reports what it would do):
 
@@ -82,6 +103,9 @@ non-scriptable for no safety gained.
 
     python -m scripts.reset_app_data --owner-email owner@example.com --yes
 
+    # a completely empty database, plus every stored object
+    python -m scripts.reset_app_data --no-owner --purge-storage --yes
+
 ``scripts/reset-db.sh`` wraps all of this for the usual local case.
 """
 
@@ -91,7 +115,8 @@ import json
 import os
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import asyncpg
@@ -370,6 +395,36 @@ def extract_dograh_service_key(value) -> str | None:
     return api_key if isinstance(api_key, str) and api_key else None
 
 
+async def resolve_managed_service_key_creators(conn: asyncpg.Connection) -> list[str]:
+    """Every provider id that could have minted one of the keys about to be dropped.
+
+    MPS scopes an OSS key list by ``created_by``, and a key is minted with the
+    provider id of whoever bootstrapped that organization -- the tenant's own
+    service user under super-admin provisioning, not one deployment-wide
+    account. Listing under a single identity therefore finds none of the keys
+    belonging to the other tenants, and the archival step, which refuses to
+    delete a row whose key it could not find, would abort the whole reset.
+
+    So the candidates are the members of every organization holding a
+    Dograh-managed configuration. A key minted by a member who has since been
+    removed is not found here; that surfaces as the archival step's "found 0"
+    refusal, which is the correct outcome -- it names a live credential that
+    needs a human, rather than silently orphaning it.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT u.provider_id
+        FROM public.organization_configurations oc
+        JOIN public.organization_users ou
+          ON ou.organization_id = oc.organization_id
+        JOIN public.users u ON u.id = ou.user_id
+        WHERE oc.key = $1 AND u.provider_id IS NOT NULL
+        """,
+        MANAGED_MODEL_CONFIGURATION_KEY,
+    )
+    return sorted(row["provider_id"] for row in rows)
+
+
 async def resolve_managed_service_keys(conn: asyncpg.Connection) -> list[str]:
     """The Dograh-minted service keys this reset is about to drop the record of.
 
@@ -387,13 +442,19 @@ async def resolve_managed_service_keys(conn: asyncpg.Connection) -> list[str]:
 
 
 async def archive_managed_service_keys(
-    service_keys: list[str], *, created_by: str
+    service_keys: list[str], *, created_by: Sequence[str]
 ) -> None:
     """Archive exactly the keys this reset is about to orphan, or abort.
 
     Keys are matched to MPS ids by prefix, and only keys the database actually
     references are archived: an unrelated key belonging to the same creator is
     somebody else's business, and archiving is irreversible.
+
+    ``created_by`` is a sequence, not one identity: OSS key listings are scoped
+    per creator and a multi-tenant database holds keys minted under many, so
+    the candidate list is the union of what each creator can see, de-duplicated
+    by MPS id. Which identity a key is listed under does not change which key
+    the database references.
 
     A failure here aborts before anything is deleted. The alternative -- delete
     the row anyway -- is what produced the orphans this exists to stop.
@@ -406,15 +467,26 @@ async def archive_managed_service_keys(
     # dependencies are not importable.
     from api.services.mps_service_key_client import mps_service_key_client
 
-    try:
-        existing = await mps_service_key_client.get_service_keys(
-            organization_id=None, created_by=created_by
-        )
-    except Exception as exc:
-        raise SystemExit(
-            f"refusing to reset: could not list MPS service keys ({exc}). "
-            "Deleting the model configuration now would orphan a live key."
-        ) from exc
+    existing: list[dict] = []
+    seen_ids: set = set()
+    owner_of: dict = {}
+    for creator in created_by:
+        try:
+            listed = await mps_service_key_client.get_service_keys(
+                organization_id=None, created_by=creator
+            )
+        except Exception as exc:
+            raise SystemExit(
+                f"refusing to reset: could not list MPS service keys ({exc}). "
+                "Deleting the model configuration now would orphan a live key."
+            ) from exc
+        for candidate in listed:
+            key_id = candidate.get("id")
+            if key_id in seen_ids:
+                continue
+            seen_ids.add(key_id)
+            owner_of[key_id] = creator
+            existing.append(candidate)
 
     for service_key in service_keys:
         matches = [
@@ -432,7 +504,7 @@ async def archive_managed_service_keys(
         key_id = matches[0]["id"]
         try:
             archived = await mps_service_key_client.archive_service_key(
-                key_id, organization_id=None, created_by=created_by
+                key_id, organization_id=None, created_by=owner_of.get(key_id)
             )
         except Exception as exc:
             raise SystemExit(
@@ -447,10 +519,196 @@ async def archive_managed_service_keys(
         print(f"archived MPS service key {key_id}")
 
 
+async def count_vault_secrets(conn: asyncpg.Connection) -> int | None:
+    """How many Supabase Vault secrets exist, or None when there is no vault.
+
+    A self-hosted or container-local Postgres has no ``vault`` schema, and that
+    is not an error: it means there is no such store to empty. Distinguishing
+    "no vault" from "an empty vault" matters only for what gets printed, but a
+    reset that claims secrets are gone should be able to say which of the two
+    it observed.
+    """
+    if not await conn.fetchval("SELECT to_regclass('vault.secrets') IS NOT NULL"):
+        return None
+    return await conn.fetchval("SELECT count(*) FROM vault.secrets")
+
+
+async def purge_vault_secrets(conn: asyncpg.Connection) -> int:
+    """Empty the Vault, returning how many secrets were removed."""
+    present = await count_vault_secrets(conn)
+    if not present:
+        return 0
+    await conn.execute("DELETE FROM vault.secrets")
+    return present
+
+
+@dataclass(frozen=True)
+class StorageTarget:
+    """One bucket a reset may empty, with everything needed to reach it."""
+
+    label: str
+    bucket: str
+    endpoint_url: str | None
+    region: str
+    access_key: str | None
+    secret_key: str | None
+    signature_version: str
+    addressing_style: str
+
+
+def resolve_storage_targets(env: Mapping[str, str], *, project_ref: str) -> list[StorageTarget]:
+    """The buckets this deployment writes to, or refuse to guess.
+
+    The configured backend is whatever ``ENABLE_AWS_S3`` selects, exactly as
+    ``api.services.storage`` reads it, so the purge follows the deployment
+    rather than a second copy of the same decision.
+
+    An S3 target must be provably the Dograh project's own storage: its
+    endpoint has to name the same Supabase project reference the database check
+    already matched. A bucket on real AWS, or on any endpoint that names no
+    project, is refused rather than emptied -- one bucket name says nothing
+    about whose data is in it, and this is the one step with no transaction to
+    roll back.
+
+    MinIO is listed whenever it is configured, backend or not: a deployment
+    that moved to S3 leaves its old MinIO bucket full of the previous tenant's
+    audio, which is precisely the leftover state a reset is asked to remove.
+    """
+    targets: list[StorageTarget] = []
+
+    if (env.get("ENABLE_AWS_S3") or "").strip().lower() == "true":
+        bucket = (env.get("S3_BUCKET") or "").strip()
+        endpoint = (env.get("S3_ENDPOINT_URL") or "").strip()
+        if not bucket:
+            raise SystemExit(
+                "refusing to purge storage: ENABLE_AWS_S3 is true but S3_BUCKET "
+                "is not set, so there is no bucket to empty."
+            )
+        if project_ref not in endpoint:
+            raise SystemExit(
+                "refusing to purge storage: S3_ENDPOINT_URL "
+                f"({endpoint or 'unset'}) does not name Supabase project "
+                f"{project_ref!r}, so the bucket {bucket!r} cannot be confirmed "
+                "to be this deployment's own storage. Nothing was deleted."
+            )
+        targets.append(
+            StorageTarget(
+                label="s3",
+                bucket=bucket,
+                endpoint_url=endpoint,
+                region=(env.get("S3_REGION") or "us-east-1").strip(),
+                access_key=env.get("AWS_ACCESS_KEY_ID"),
+                secret_key=env.get("AWS_SECRET_ACCESS_KEY"),
+                signature_version=(env.get("S3_SIGNATURE_VERSION") or "s3v4").strip(),
+                addressing_style=(env.get("S3_ADDRESSING_STYLE") or "path").strip(),
+            )
+        )
+
+    minio_endpoint = (env.get("MINIO_ENDPOINT") or "").strip()
+    if minio_endpoint:
+        scheme = (
+            "https"
+            if (env.get("MINIO_SECURE") or "false").strip().lower() == "true"
+            else "http"
+        )
+        targets.append(
+            StorageTarget(
+                label="minio",
+                bucket=(env.get("MINIO_BUCKET") or "voice-audio").strip(),
+                endpoint_url=f"{scheme}://{minio_endpoint}",
+                region="us-east-1",
+                access_key=env.get("MINIO_ACCESS_KEY"),
+                secret_key=env.get("MINIO_SECRET_KEY"),
+                signature_version="s3v4",
+                addressing_style="path",
+            )
+        )
+
+    return targets
+
+
+def _storage_client(target: StorageTarget):
+    # Imported here for the same reason the MPS client is: this module is
+    # loaded by path outside the api container by the tests, where boto3 need
+    # not be installed.
+    import boto3
+    from botocore.config import Config
+
+    kwargs: dict = {
+        "region_name": target.region,
+        "config": Config(
+            signature_version=target.signature_version,
+            s3={"addressing_style": target.addressing_style},
+        ),
+    }
+    if target.endpoint_url:
+        kwargs["endpoint_url"] = target.endpoint_url
+    if target.access_key and target.secret_key:
+        kwargs["aws_access_key_id"] = target.access_key
+        kwargs["aws_secret_access_key"] = target.secret_key
+    return boto3.client("s3", **kwargs)
+
+
+def _list_storage_keys(target: StorageTarget) -> list[str]:
+    client = _storage_client(target)
+    keys: list[str] = []
+    token: str | None = None
+    while True:
+        kwargs: dict = {"Bucket": target.bucket}
+        if token:
+            kwargs["ContinuationToken"] = token
+        page = client.list_objects_v2(**kwargs)
+        keys.extend(item["Key"] for item in page.get("Contents", []))
+        if not page.get("IsTruncated"):
+            return keys
+        token = page.get("NextContinuationToken")
+
+
+def inspect_storage_target(target: StorageTarget) -> tuple[int | None, str | None]:
+    """``(object count, None)``, or ``(None, reason)`` when the bucket is unreachable.
+
+    A bucket that does not exist is an empty one for this script's purposes,
+    and an endpoint that is not answering is worth reporting rather than
+    aborting a reset over -- the dry run's job is to say what it can see.
+    """
+    try:
+        return len(_list_storage_keys(target)), None
+    except Exception as exc:  # noqa: BLE001 - any failure is reported, not raised
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def purge_storage_target(target: StorageTarget) -> int:
+    """Delete every object in the bucket, returning how many were removed.
+
+    One object per request, not the batch ``DeleteObjects``: Supabase's S3
+    endpoint answers that operation with an empty-code ``ClientError``, so the
+    batch form fails on the very backend this deployment uses. Single deletes
+    are slower and are the only form both a real S3 bucket and the
+    S3-compatible endpoints here agree on, which for a development reset is the
+    right trade.
+    """
+    client = _storage_client(target)
+    keys = _list_storage_keys(target)
+    for key in keys:
+        try:
+            client.delete_object(Bucket=target.bucket, Key=key)
+        except Exception as exc:  # noqa: BLE001 - reported with the key it failed on
+            raise SystemExit(
+                f"storage purge failed on {target.label} bucket "
+                f"{target.bucket!r}: {key}: {exc}. The bucket is partially "
+                "emptied; re-run to finish it."
+            ) from exc
+    return len(keys)
+
+
 async def apply_reset(
-    conn: asyncpg.Connection, *, owner_id: int, clear_tables: list[str]
+    conn: asyncpg.Connection, *, owner_id: int | None, clear_tables: list[str]
 ) -> None:
-    """Empty the database down to one super-admin and no organizations.
+    """Empty the database to no organizations, and to one super-admin or none.
+
+    ``owner_id`` of None is the ``--no-owner`` reset: no identity is preserved,
+    so ``users`` ends empty and its sequence restarts alongside the
+    organizations sequence.
 
     Every statement is here rather than inline in ``run()`` so the end state can
     be asserted against a real database without going through the environment
@@ -464,14 +722,20 @@ async def apply_reset(
     # Before the users delete, not after: user_configurations has a foreign key
     # to users, so a non-owner who holds any configuration row would otherwise
     # make the whole reset fail on a constraint violation.
-    await conn.execute(
-        "DELETE FROM public.user_configurations "
-        "WHERE user_id IS DISTINCT FROM $1 OR key <> ALL($2::text[])",
-        owner_id,
-        list(PRESERVED_USER_CONFIGURATION_KEYS),
-    )
+    if owner_id is None:
+        await conn.execute("DELETE FROM public.user_configurations")
+    else:
+        await conn.execute(
+            "DELETE FROM public.user_configurations "
+            "WHERE user_id IS DISTINCT FROM $1 OR key <> ALL($2::text[])",
+            owner_id,
+            list(PRESERVED_USER_CONFIGURATION_KEYS),
+        )
     await conn.execute("DELETE FROM public.organization_users")
-    await conn.execute("DELETE FROM public.users WHERE id <> $1", owner_id)
+    if owner_id is None:
+        await conn.execute("DELETE FROM public.users")
+    else:
+        await conn.execute("DELETE FROM public.users WHERE id <> $1", owner_id)
     # Must precede the organizations delete: users.selected_organization_id is a
     # foreign key into the table about to be emptied.
     await conn.execute(
@@ -486,6 +750,10 @@ async def apply_reset(
     await conn.execute(
         "SELECT setval(pg_get_serial_sequence('public.organizations', 'id'), 1, false)"
     )
+    if owner_id is None:
+        await conn.execute(
+            "SELECT setval(pg_get_serial_sequence('public.users', 'id'), 1, false)"
+        )
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -503,20 +771,39 @@ async def run(args: argparse.Namespace) -> int:
         clear_tables = [t for t in tables if t in frozenset(CLEAR_TABLES)]
         missing = sorted(set(CLEAR_TABLES) - set(tables))
         before = await counts_for(conn, tables)
-        owner = await resolve_owner(conn, args.owner_email)
+        owner = (
+            None if args.no_owner else await resolve_owner(conn, args.owner_email)
+        )
+
+        project_ref = derive_project_ref(dsn)
+        storage_targets = (
+            resolve_storage_targets(os.environ, project_ref=project_ref)
+            if args.purge_storage
+            else []
+        )
 
         print(f"environment: {REQUIRED_ENVIRONMENT}")
-        print(f"supabase project: {derive_project_ref(dsn)}")
+        print(f"supabase project: {project_ref}")
         print(f"target: {describe_target(dsn)}")
         print(f"connected database: {await conn.fetchval('SELECT current_database()')}")
-        print(
-            f"preserving super-admin id={owner['id']} email={owner['email']} "
-            f"(selected_organization_id will be set to NULL)"
-        )
+        if owner is None:
+            print(
+                "preserving no identity: every user is deleted, including any "
+                "super-admin. Re-create one with scripts/bootstrap_superadmin.py."
+            )
+        else:
+            print(
+                f"preserving super-admin id={owner['id']} email={owner['email']} "
+                f"(selected_organization_id will be set to NULL)"
+            )
         print("\ncurrent row counts (public schema):")
         for table in tables:
             if table in ("organizations", "organization_users"):
                 marker = "clear (no client organizations survive)"
+            elif table == "users" and owner is None:
+                marker = "clear (no identity is preserved)"
+            elif table in KEY_FILTERED_TABLES and owner is None:
+                marker = "clear (no identity is preserved)"
             elif table in PRESERVED_TABLES:
                 marker = "keep"
             elif table in KEY_FILTERED_TABLES:
@@ -530,26 +817,58 @@ async def run(args: argparse.Namespace) -> int:
                 + ", ".join(missing)
             )
 
-        other_users = await conn.fetchval(
-            "SELECT count(*) FROM public.users WHERE id <> $1", owner["id"]
-        )
+        if owner is None:
+            deleted_users = await conn.fetchval("SELECT count(*) FROM public.users")
+            stale_user_config = await conn.fetchval(
+                "SELECT count(*) FROM public.user_configurations"
+            )
+        else:
+            deleted_users = await conn.fetchval(
+                "SELECT count(*) FROM public.users WHERE id <> $1", owner["id"]
+            )
+            stale_user_config = await conn.fetchval(
+                "SELECT count(*) FROM public.user_configurations "
+                "WHERE user_id IS DISTINCT FROM $1 OR key <> ALL($2::text[])",
+                owner["id"],
+                list(PRESERVED_USER_CONFIGURATION_KEYS),
+            )
         all_orgs = await conn.fetchval("SELECT count(*) FROM public.organizations")
         all_members = await conn.fetchval(
             "SELECT count(*) FROM public.organization_users"
         )
-        stale_user_config = await conn.fetchval(
-            "SELECT count(*) FROM public.user_configurations "
-            "WHERE user_id IS DISTINCT FROM $1 OR key <> ALL($2::text[])",
-            owner["id"],
-            list(PRESERVED_USER_CONFIGURATION_KEYS),
-        )
         print(
-            f"\nidentity deletes: users={other_users} "
+            f"\nidentity deletes: users={deleted_users} "
             f"organizations={all_orgs} organization_users={all_members}"
         )
         print(f"scoped config deletes: user_configurations={stale_user_config}")
 
+        vault_secrets = await count_vault_secrets(conn)
+        if vault_secrets is None:
+            print("vault secrets: no vault schema on this database")
+        else:
+            print(f"vault secrets to delete: {vault_secrets}")
+
+        storage_plan: list[tuple[StorageTarget, int | None, str | None]] = []
+        if args.purge_storage:
+            print("\nstorage to purge:")
+            for target in storage_targets:
+                count, reason = inspect_storage_target(target)
+                storage_plan.append((target, count, reason))
+                located = f"{target.label} bucket {target.bucket!r} at {target.endpoint_url}"
+                if reason is None:
+                    print(f"  {located}: {count} object(s)")
+                else:
+                    print(f"  {located}: unreachable, skipped ({reason})")
+            if not storage_targets:
+                print("  no storage backend is configured")
+        else:
+            print(
+                "\nstorage: not purged (pass --purge-storage to empty the "
+                "configured buckets too)"
+            )
+
         managed_service_keys = await resolve_managed_service_keys(conn)
+        service_key_creators = await resolve_managed_service_key_creators(conn)
         if managed_service_keys:
             print(
                 f"\nMPS service keys to archive: {len(managed_service_keys)} "
@@ -566,17 +885,42 @@ async def run(args: argparse.Namespace) -> int:
         # Outside the transaction and before it: archiving is an outbound call
         # that cannot be rolled back, so it must either succeed or stop the
         # reset while the database still holds the key it refers to.
-        await archive_managed_service_keys(
-            managed_service_keys, created_by=owner["provider_id"]
-        )
+        creators = list(service_key_creators)
+        if owner is not None and owner["provider_id"] not in creators:
+            creators.append(owner["provider_id"])
+        await archive_managed_service_keys(managed_service_keys, created_by=creators)
 
         async with conn.transaction():
-            await apply_reset(conn, owner_id=owner["id"], clear_tables=clear_tables)
+            await apply_reset(
+                conn,
+                owner_id=None if owner is None else owner["id"],
+                clear_tables=clear_tables,
+            )
+            purged_secrets = await purge_vault_secrets(conn)
 
         after = await counts_for(conn, tables)
         print("\nrow counts after reset:")
         for table in tables:
             print(f"  {table:35} {before[table]:>8} -> {after[table]:>8}")
+        print(f"\nvault secrets deleted: {purged_secrets}")
+
+        # After the transaction, never before it: deleting files for a reset
+        # that then rolled back would destroy data the database still refers to.
+        if args.purge_storage:
+            print("storage purged:")
+            for target, count, reason in storage_plan:
+                located = f"{target.label} bucket {target.bucket!r}"
+                if reason is not None:
+                    print(f"  {located}: skipped ({reason})")
+                    continue
+                deleted = await asyncio.to_thread(purge_storage_target, target)
+                remaining, remaining_reason = await asyncio.to_thread(
+                    inspect_storage_target, target
+                )
+                print(
+                    f"  {located}: deleted {deleted} object(s), "
+                    f"remaining {remaining if remaining_reason is None else remaining_reason}"
+                )
         return 0
     finally:
         await conn.close()
@@ -585,12 +929,31 @@ async def run(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     """The command line, separated from main() so it can be tested."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    # Exactly one, and no default: "keep this account" and "keep nobody" are
+    # different resets, and neither is safe to infer from an omitted argument.
+    identity = parser.add_mutually_exclusive_group(required=True)
+    identity.add_argument(
         "--owner-email",
-        required=True,
         help=(
-            "identity to preserve; required, so the account that survives is "
-            "always named deliberately rather than inherited from a default."
+            "identity to preserve; the account that survives is always named "
+            "deliberately rather than inherited from a default."
+        ),
+    )
+    identity.add_argument(
+        "--no-owner",
+        action="store_true",
+        help=(
+            "preserve no identity at all: every user is deleted, including the "
+            "super-admin. Re-create one afterwards with "
+            "scripts/bootstrap_superadmin.py."
+        ),
+    )
+    parser.add_argument(
+        "--purge-storage",
+        action="store_true",
+        help=(
+            "also delete every object in the deployment's configured buckets, "
+            "after the database transaction commits."
         ),
     )
     parser.add_argument(

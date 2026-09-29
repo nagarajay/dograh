@@ -142,10 +142,30 @@ class TestResolveTargetDsn:
 class TestCommandLine:
     """The confirmations the reset asks for, and the ones it deliberately does not."""
 
-    def test_owner_email_is_required(self):
+    def test_an_identity_choice_is_required(self):
+        # Neither "keep this account" nor "keep nobody" is safe to infer from
+        # an omitted argument, so neither is the default.
         parser = reset_app_data.build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args([])
+
+    def test_no_owner_is_the_other_way_to_name_the_survivors(self):
+        parser = reset_app_data.build_parser()
+        args = parser.parse_args(["--no-owner"])
+        assert args.no_owner is True
+        assert args.owner_email is None
+
+    def test_an_owner_and_no_owner_cannot_both_be_asked_for(self):
+        parser = reset_app_data.build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--owner-email", "a@b.c", "--no-owner"])
+
+    def test_storage_is_not_purged_unless_asked_for(self):
+        parser = reset_app_data.build_parser()
+        assert parser.parse_args(["--no-owner"]).purge_storage is False
+        assert (
+            parser.parse_args(["--no-owner", "--purge-storage"]).purge_storage is True
+        )
 
     def test_dry_run_is_the_default(self):
         parser = reset_app_data.build_parser()
@@ -222,3 +242,80 @@ class TestTableClassification:
         # ordering, which is why these two are not in CLEAR_TABLES.
         assert "organizations" in reset_app_data.PRESERVED_TABLES
         assert "organization_users" in reset_app_data.PRESERVED_TABLES
+
+
+class TestResolveStorageTargets:
+    """Which buckets a purge may empty, and which it refuses to guess about."""
+
+    @staticmethod
+    def storage_env(**overrides):
+        base = {
+            "ENABLE_AWS_S3": "true",
+            "S3_BUCKET": "dograh-bucket",
+            "S3_ENDPOINT_URL": f"https://{PROJECT_REF}.storage.supabase.co/storage/v1/s3",
+            "S3_REGION": "ap-south-1",
+            "AWS_ACCESS_KEY_ID": "id",
+            "AWS_SECRET_ACCESS_KEY": "secret",
+            "MINIO_ENDPOINT": "minio:9000",
+            "MINIO_BUCKET": "voice-audio",
+            "MINIO_ACCESS_KEY": "user",
+            "MINIO_SECRET_KEY": "pass",
+        }
+        base.update(overrides)
+        return {k: v for k, v in base.items() if v is not None}
+
+    def test_the_configured_s3_bucket_and_the_local_minio_bucket_are_both_targets(self):
+        # MinIO is listed even when S3 is the live backend: a deployment that
+        # moved to S3 left the previous tenant's audio sitting in MinIO, which
+        # is exactly the leftover a reset is asked to remove.
+        targets = reset_app_data.resolve_storage_targets(
+            self.storage_env(), project_ref=PROJECT_REF
+        )
+
+        assert [t.label for t in targets] == ["s3", "minio"]
+        assert [t.bucket for t in targets] == ["dograh-bucket", "voice-audio"]
+
+    def test_minio_alone_when_s3_is_not_enabled(self):
+        targets = reset_app_data.resolve_storage_targets(
+            self.storage_env(ENABLE_AWS_S3="false"), project_ref=PROJECT_REF
+        )
+
+        assert [t.label for t in targets] == ["minio"]
+
+    def test_minio_secure_selects_https(self):
+        targets = reset_app_data.resolve_storage_targets(
+            self.storage_env(ENABLE_AWS_S3="false", MINIO_SECURE="true"),
+            project_ref=PROJECT_REF,
+        )
+
+        assert targets[0].endpoint_url == "https://minio:9000"
+
+    def test_refuses_a_bucket_on_an_endpoint_that_names_another_project(self):
+        # A bucket name says nothing about whose data is in it, and this is the
+        # one step of a reset with no transaction to roll back.
+        with pytest.raises(SystemExit, match="does not name Supabase project"):
+            reset_app_data.resolve_storage_targets(
+                self.storage_env(
+                    S3_ENDPOINT_URL="https://ormecixneglrqlqnseou.storage.supabase.co/storage/v1/s3"
+                ),
+                project_ref=PROJECT_REF,
+            )
+
+    def test_refuses_a_bucket_on_an_endpoint_that_names_no_project(self):
+        with pytest.raises(SystemExit, match="does not name Supabase project"):
+            reset_app_data.resolve_storage_targets(
+                self.storage_env(S3_ENDPOINT_URL=None), project_ref=PROJECT_REF
+            )
+
+    def test_refuses_s3_with_no_bucket_configured(self):
+        with pytest.raises(SystemExit, match="S3_BUCKET"):
+            reset_app_data.resolve_storage_targets(
+                self.storage_env(S3_BUCKET=None), project_ref=PROJECT_REF
+            )
+
+    def test_no_storage_configured_is_no_targets_rather_than_an_error(self):
+        targets = reset_app_data.resolve_storage_targets(
+            {"ENABLE_AWS_S3": "false"}, project_ref=PROJECT_REF
+        )
+
+        assert targets == []

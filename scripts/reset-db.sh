@@ -12,8 +12,13 @@
 # users table. reset_app_data.py additionally refuses an owner that is not a
 # super-admin, since the account it preserves ends up with no organization.
 #
-#   ./scripts/reset-db.sh          dry run — reports what would be deleted
-#   ./scripts/reset-db.sh --yes    performs the reset
+#   ./scripts/reset-db.sh                  dry run — reports what would be deleted
+#   ./scripts/reset-db.sh --yes            performs the reset
+#   ./scripts/reset-db.sh --no-owner       preserve no identity at all: every
+#                                          user goes, super-admin included, and
+#                                          scripts/bootstrap_superadmin.py
+#                                          re-creates one afterwards
+#   ./scripts/reset-db.sh --purge-storage  also empty the deployment's buckets
 #
 # The reset itself runs inside the running `api` container, so it targets
 # exactly the database that deployment is configured against. scripts/
@@ -39,17 +44,25 @@ die() {
 }
 
 apply=false
+no_owner=false
+purge_storage=false
 for arg in "$@"; do
     case "$arg" in
         --yes)
             apply=true
             ;;
+        --no-owner)
+            no_owner=true
+            ;;
+        --purge-storage)
+            purge_storage=true
+            ;;
         -h | --help)
-            sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
-            die "unknown argument: ${arg}. Usage: ./scripts/reset-db.sh [--yes]"
+            die "unknown argument: ${arg}. Usage: ./scripts/reset-db.sh [--no-owner] [--purge-storage] [--yes]"
             ;;
     esac
 done
@@ -115,10 +128,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
-args=(--owner-email "$OWNER_EMAIL")
+# --no-owner and --owner-email are mutually exclusive upstream, so exactly one
+# of them is passed. The fixed owner stays the default: a reset that preserves
+# nobody is the larger claim and has to be asked for.
+if [[ "$no_owner" == true ]]; then
+    args=(--no-owner)
+    survivors="preserving no identity: every user is deleted, super-admin included"
+else
+    args=(--owner-email "$OWNER_EMAIL")
+    survivors="preserving super-admin ${OWNER_EMAIL}"
+fi
+if [[ "$purge_storage" == true ]]; then
+    args+=(--purge-storage)
+    survivors="${survivors}, and emptying the configured storage buckets"
+fi
 if [[ "$apply" == true ]]; then
     args+=(--yes)
-    echo "reset-db: about to reset the development database to zero organizations, preserving super-admin ${OWNER_EMAIL}."
+    echo "reset-db: about to reset the development database to zero organizations, ${survivors}."
 else
     echo "reset-db: dry run — nothing will be deleted. Re-run with --yes to apply."
 fi
