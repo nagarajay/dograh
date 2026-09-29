@@ -41,6 +41,8 @@ async def test_user_idle_handler_uses_realtime_append_path():
     engine = SimpleNamespace(
         llm=SimpleNamespace(),
         end_call_with_reason=AsyncMock(),
+        closing_in_progress=False,
+        is_call_disposed=lambda: False,
     )
     aggregator = SimpleNamespace(push_frame=AsyncMock())
     handler = UserIdleHandler(engine)

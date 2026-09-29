@@ -49,7 +49,7 @@ from api.services.workflow.dto import (
 )
 from api.services.workflow.pipecat_engine import PipecatEngine
 from api.services.workflow.workflow_graph import WorkflowGraph
-from api.tests.pipecat_test_utils import run_engine_test_pipeline
+from api.tests.pipecat_test_utils import run_engine_test_pipeline, stub_agent_runtime
 
 GREETING = "Hello, thanks for calling."
 
@@ -194,9 +194,7 @@ async def test_flag_true_does_not_change_node_reached_by_transition():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("wait", "llm_calls_before_caller"), [(False, 1), (True, 0)]
-)
+@pytest.mark.parametrize(("wait", "llm_calls_before_caller"), [(False, 1), (True, 0)])
 async def test_pipeline_caller_speech_after_greeting_runs_normal_llm_turn(
     wait: bool, llm_calls_before_caller: int
 ):
@@ -282,3 +280,34 @@ async def test_pipeline_caller_speech_after_greeting_runs_normal_llm_turn(
         m.get("role") == "assistant" and GREETING in str(m.get("content"))
         for m in context.get_messages()
     )
+
+
+@pytest.mark.asyncio
+async def test_realtime_service_owns_its_first_turn_after_the_greeting():
+    """A realtime model is seeded by the greeting handoff, not by a queued generation."""
+    workflow = _workflow()
+    engine, llm, _ = _engine(workflow)
+    engine._is_realtime = True
+
+    assert await _open_start(engine, workflow) == "greeting"
+
+    assert engine._post_greeting_generation_task is None
+    await _finish_greeting(engine)
+    await asyncio.sleep(0)
+    llm.queue_frame.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handoff_during_the_greeting_drops_the_post_greeting_generation():
+    """The agent that was retired mid-greeting must not start a turn for the new one."""
+    workflow = _workflow()
+    engine, llm, _ = _engine(workflow)
+
+    assert await _open_start(engine, workflow) == "greeting"
+    assert engine._post_greeting_generation_task is not None
+
+    engine._active_agent = stub_agent_runtime(visit_id="visit-after-handoff")
+    await _finish_greeting(engine)
+    await engine._post_greeting_generation_task
+
+    llm.queue_frame.assert_not_awaited()
