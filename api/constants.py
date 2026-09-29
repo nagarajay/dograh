@@ -111,6 +111,12 @@ PLATFORM_PROVISIONING_API_KEY_NAME = "platform-provisioning"
 
 # Storage Configuration
 ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
+# AVSIQ-managed deployments can require external S3/S3-compatible storage.
+# Self-hosted production deployments retain the supported MinIO default unless
+# this opt-in guard is enabled.
+REQUIRE_EXTERNAL_S3_STORAGE = os.getenv(
+    "REQUIRE_EXTERNAL_S3_STORAGE", "false"
+).lower() == "true"
 
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")

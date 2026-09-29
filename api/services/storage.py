@@ -14,6 +14,7 @@ from api.constants import (
     S3_ENDPOINT_URL,
     S3_REGION,
     S3_SIGNATURE_VERSION,
+    REQUIRE_EXTERNAL_S3_STORAGE,
 )
 from api.enums import Environment, StorageBackend
 
@@ -78,6 +79,45 @@ def get_storage_for_backend(backend: str) -> BaseFileSystem:
         raise ValueError(f"Unknown storage backend: {backend}")
 
 
+class InsecureStorageConfigurationError(RuntimeError):
+    """Raised when a production deployment has no durable object storage."""
+
+
+def assert_durable_storage_configured(backend: StorageBackend) -> None:
+    """Fail closed when production would write call audio to dev-only storage.
+
+    MinIO is the local and OSS default: `ENABLE_AWS_S3` is unset in every
+    development environment, so a production deployment that simply forgot the
+    flag would come up healthy and start writing greetings, opening audio and
+    call recordings into a container-local bucket that no backup and no
+    lifecycle policy covers. The loss is silent and is only discovered when the
+    container is replaced.
+
+    So production requires S3 (or an S3-compatible endpoint, which is what
+    `S3_ENDPOINT_URL` is for) and refuses to start otherwise. `ENVIRONMENT` is
+    the deployment's own existing declaration — the same value that already
+    selects the null filesystem under `test` — and nothing is inferred from a
+    hostname, a URL or the absence of a debugger.
+    """
+    if not REQUIRE_EXTERNAL_S3_STORAGE or ENVIRONMENT != Environment.PRODUCTION.value:
+        return
+
+    if backend is not StorageBackend.S3:
+        raise InsecureStorageConfigurationError(
+            "ENVIRONMENT=production requires durable object storage. "
+            f"The configured backend is '{backend.value}', which is the local "
+            "development default. Set ENABLE_AWS_S3=true and S3_BUCKET (with "
+            "S3_ENDPOINT_URL for an S3-compatible provider). MinIO is dev-only: "
+            "audio written to it is not durable and is lost when the container "
+            "is replaced."
+        )
+
+    if not S3_BUCKET:
+        raise InsecureStorageConfigurationError(
+            "ENVIRONMENT=production requires S3_BUCKET to be set."
+        )
+
+
 def get_current_storage_backend() -> StorageBackend:
     """Get the current storage backend enum."""
     return StorageBackend.get_current_backend()
@@ -91,6 +131,9 @@ if ENVIRONMENT == Environment.TEST.value:
     storage_fs: BaseFileSystem = NullFileSystem()
 else:
     _backend = StorageBackend.get_current_backend()
+    # Fail closed before the backend is built when the managed-deployment guard
+    # is explicitly enabled.
+    assert_durable_storage_configured(_backend)
     logger.info(
         f"Initializing storage backend: {_backend.name} (value: {_backend.value}, ENABLE_AWS_S3={ENABLE_AWS_S3})"
     )
