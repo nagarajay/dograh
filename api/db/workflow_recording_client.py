@@ -5,7 +5,7 @@ import string
 from typing import List, Optional
 
 from loguru import logger
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 
 from api.db.base_client import BaseDBClient
 from api.db.models import WorkflowRecordingModel

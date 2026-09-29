@@ -12,6 +12,9 @@ class RecordingUploadResponseSchema(BaseModel):
     upload_url: str = Field(..., description="Presigned URL for uploading the audio")
     recording_id: str = Field(..., description="Short unique recording ID")
     storage_key: str = Field(..., description="Storage key where file will be uploaded")
+    upload_token: str = Field(
+        ..., description="Server-issued token required to create the recording"
+    )
 
 
 class FileDescriptor(BaseModel):
@@ -60,6 +63,9 @@ class RecordingCreateRequestSchema(BaseModel):
         ..., description="User-provided transcript of the recording"
     )
     storage_key: str = Field(..., description="Storage key from upload step")
+    upload_token: str = Field(
+        ..., description="Server-issued token returned by the upload-url endpoint"
+    )
     metadata: Optional[Dict[str, Any]] = Field(
         default=None, description="Optional metadata (file_size, duration, etc.)"
     )

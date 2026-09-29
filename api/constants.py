@@ -117,6 +117,9 @@ ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
 REQUIRE_EXTERNAL_S3_STORAGE = os.getenv(
     "REQUIRE_EXTERNAL_S3_STORAGE", "false"
 ).lower() == "true"
+RECORDING_UPLOAD_TOKEN_SECRET = os.getenv(
+    "RECORDING_UPLOAD_TOKEN_SECRET"
+) or os.getenv("OSS_JWT_SECRET", "change-me-in-production")
 
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
