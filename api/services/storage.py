@@ -84,37 +84,40 @@ class InsecureStorageConfigurationError(RuntimeError):
 
 
 def assert_durable_storage_configured(backend: StorageBackend) -> None:
-    """Fail closed when production would write call audio to dev-only storage.
+    """Fail closed when an enabled guard would write call audio to dev-only storage.
 
     MinIO is the local and OSS default: `ENABLE_AWS_S3` is unset in every
-    development environment, so a production deployment that simply forgot the
+    development environment, so a managed deployment that simply forgot the
     flag would come up healthy and start writing greetings, opening audio and
     call recordings into a container-local bucket that no backup and no
     lifecycle policy covers. The loss is silent and is only discovered when the
     container is replaced.
 
-    So production requires S3 (or an S3-compatible endpoint, which is what
-    `S3_ENDPOINT_URL` is for) and refuses to start otherwise. `ENVIRONMENT` is
-    the deployment's own existing declaration — the same value that already
-    selects the null filesystem under `test` — and nothing is inferred from a
-    hostname, a URL or the absence of a debugger.
+    The guard is an explicit opt-in: `REQUIRE_EXTERNAL_S3_STORAGE=true`. When it
+    is set, S3 (or an S3-compatible endpoint, which is what `S3_ENDPOINT_URL`
+    is for) with a bucket is required and startup is refused otherwise. An
+    operator who enables it gets it in every environment that builds a storage
+    backend, `local` included -- it is not silently weakened by `ENVIRONMENT`.
+    `ENVIRONMENT=test` never builds one (it uses the null filesystem), so the
+    guard is not reached there. With the flag unset, nothing changes.
     """
-    if not REQUIRE_EXTERNAL_S3_STORAGE or ENVIRONMENT != Environment.PRODUCTION.value:
+    if not REQUIRE_EXTERNAL_S3_STORAGE:
         return
 
     if backend is not StorageBackend.S3:
         raise InsecureStorageConfigurationError(
-            "ENVIRONMENT=production requires durable object storage. "
-            f"The configured backend is '{backend.value}', which is the local "
-            "development default. Set ENABLE_AWS_S3=true and S3_BUCKET (with "
-            "S3_ENDPOINT_URL for an S3-compatible provider). MinIO is dev-only: "
-            "audio written to it is not durable and is lost when the container "
-            "is replaced."
+            "REQUIRE_EXTERNAL_S3_STORAGE is enabled, which requires durable "
+            f"object storage. The configured backend is '{backend.value}', which "
+            "is the local development default. Set ENABLE_AWS_S3=true and "
+            "S3_BUCKET (with S3_ENDPOINT_URL for an S3-compatible provider). "
+            "MinIO is dev-only: audio written to it is not durable and is lost "
+            "when the container is replaced."
         )
 
     if not S3_BUCKET:
         raise InsecureStorageConfigurationError(
-            "ENVIRONMENT=production requires S3_BUCKET to be set."
+            "REQUIRE_EXTERNAL_S3_STORAGE is enabled, which requires S3_BUCKET "
+            "to be set."
         )
 
 
