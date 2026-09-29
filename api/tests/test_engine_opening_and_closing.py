@@ -46,8 +46,8 @@ from pipecat.utils.enums import EndTaskReason
 from pipecat.utils.time import time_now_iso8601
 
 from api.schemas.workflow_configurations import CallDispositionOption
-from api.services.pipecat.pipeline_engine_callbacks_processor import (
-    PipelineEngineCallbacksProcessor,
+from api.services.pipecat.agent_generation_processor import (
+    AgentGenerationProcessor,
 )
 from api.services.workflow.disposition_extraction import DispositionExtractionService
 from api.services.workflow.dto import (
@@ -134,7 +134,7 @@ def _unit_engine(workflow: WorkflowGraph, **kwargs):
         workflow_run_id=1,
         **kwargs,
     )
-    engine.set_task(task)
+    engine.call_worker = task
     return engine
 
 
@@ -321,7 +321,7 @@ async def _run_conversation(allow_after_greeting: bool) -> dict:
         params=PipelineParams(),
         enable_rtvi=False,
     )
-    engine.set_task(task)
+    engine.call_worker = task
     seen: dict = {}
 
     async def on_ready() -> None:
@@ -470,7 +470,7 @@ async def _run_end(workflow: WorkflowGraph, steps, *, audio_ms: int = 300) -> di
         ),
     )
     # The same tap production uses to tell the engine what a generation said.
-    callbacks = PipelineEngineCallbacksProcessor(
+    callbacks = AgentGenerationProcessor(
         generation_started_callback=engine.create_generation_started_callback(),
         llm_text_frame_callback=engine.handle_llm_text_frame,
     )
@@ -489,7 +489,7 @@ async def _run_end(workflow: WorkflowGraph, steps, *, audio_ms: int = 300) -> di
         params=PipelineParams(),
         enable_rtvi=False,
     )
-    engine.set_task(task)
+    engine.call_worker = task
     end_reasons: list[str] = []
 
     at_end: dict = {}
@@ -669,7 +669,11 @@ class TestUserIdleDuringClosing:
     async def test_a_live_call_is_still_asked_if_anyone_is_there(self):
         from api.services.workflow.pipecat_engine_callbacks import UserIdleHandler
 
-        engine = Mock(closing_in_progress=False)
+        engine = Mock(
+            closing_in_progress=False,
+            answer_supervisor=None,
+            transfer_in_progress=False,
+        )
         engine.is_call_disposed.return_value = False
         aggregator = Mock(push_frame=AsyncMock())
 

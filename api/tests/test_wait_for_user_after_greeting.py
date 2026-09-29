@@ -112,7 +112,7 @@ def _engine(workflow: WorkflowGraph):
         call_context_vars={},
         workflow_run_id=1,
     )
-    engine.set_task(task)
+    engine.call_worker = task
     return engine, llm, task
 
 
@@ -254,7 +254,7 @@ async def test_pipeline_caller_speech_after_greeting_runs_normal_llm_turn(
         params=PipelineParams(),
         enable_rtvi=False,
     )
-    engine.set_task(task)
+    engine.call_worker = task
     seen: dict[str, int] = {}
 
     async def on_ready() -> None:

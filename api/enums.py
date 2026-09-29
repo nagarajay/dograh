@@ -17,6 +17,19 @@ class CallType(Enum):
     OUTBOUND = "outbound"
 
 
+class AnswerAction(str, Enum):
+    # Play the workflow opening, then allow normal conversation.
+    RELEASE = "release"
+    # Play the configured voicemail message, then disconnect.
+    LEAVE_MESSAGE = "leave_message"
+    # Disconnect without playing a message.
+    DROP = "drop"
+    # Play the screening introduction, then listen again for the subscriber.
+    SCREEN_THEN_REARM = "screen_then_rearm"
+    # Stop answer handling because the pipeline has ended.
+    CANCELLED = "cancelled"
+
+
 class TelephonyCallStatus(str, Enum):
     INITIATED = "initiated"
     RINGING = "ringing"
@@ -50,6 +63,7 @@ class WorkflowRunMode(Enum):
     VONAGE = "vonage"
     VOBIZ = "vobiz"
     CLOUDONIX = "cloudonix"
+    EXOTEL = "exotel"
     TELNYX = "telnyx"
     WEBRTC = "webrtc"
     SMALLWEBRTC = "smallwebrtc"
@@ -85,6 +99,7 @@ WORKFLOW_RUN_MODES_BY_CHANNEL: dict[str, tuple[str, ...]] = {
         WorkflowRunMode.VONAGE.value,
         WorkflowRunMode.VOBIZ.value,
         WorkflowRunMode.CLOUDONIX.value,
+        WorkflowRunMode.EXOTEL.value,
         WorkflowRunMode.TELNYX.value,
         WorkflowRunMode.STASIS.value,
         WorkflowRunMode.VOICE.value,
@@ -210,6 +225,7 @@ class ToolCategory(Enum):
     HTTP_API = "http_api"  # Custom HTTP API calls (implemented)
     END_CALL = "end_call"  # End call tool
     TRANSFER_CALL = "transfer_call"  # Transfer call to phone number (Twilio only)
+    TRANSFER_AGENT = "transfer_agent"  # Hand the live call to another Dograh agent
     CALCULATOR = "calculator"  # Built-in calculator tool
     NATIVE = "native"  # Built-in integrations (future: dtmf_input)
     INTEGRATION = "integration"  # Third-party integrations (future: Google Calendar, Salesforce, etc.)

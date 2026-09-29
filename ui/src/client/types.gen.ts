@@ -97,6 +97,12 @@ export type AriConfigurationRequest = {
      */
     ws_client_name?: string;
     /**
+     * Dial String Template
+     *
+     * How a plain number becomes an Asterisk dial string. ``{number}`` is substituted; anything already carrying a channel technology (``PJSIP/...``, ``Local/...``) is dialled as written.
+     */
+    dial_string_template?: string;
+    /**
      * Optional external PBX connected through this Asterisk instance
      */
     external_pbx?: VicidialExternalPbxConfiguration | null;
@@ -140,6 +146,84 @@ export type AwsBedrockLlmConfiguration = {
      * AWS region where the Bedrock model is available.
      */
     aws_region?: string;
+};
+
+/**
+ * AWS Nova 2 Sonic
+ *
+ * Amazon Bedrock's realtime speech-to-speech model. Uses AWS IAM credentials rather than a Bedrock API key.
+ */
+export type AwsNovaSonicRealtimeLlmConfiguration = {
+    /**
+     * Provider
+     */
+    provider?: 'aws_nova_sonic';
+    /**
+     * Api Key
+     *
+     * Not used for Nova 2 Sonic — authentication is via the AWS credentials above. Leave blank.
+     */
+    api_key?: string | Array<string> | null;
+    /**
+     * Model
+     *
+     * Amazon Nova 2 Sonic model ID.
+     */
+    model?: string;
+    /**
+     * Voice
+     *
+     * Voice the model speaks in. Tiffany and Matthew are polyglot voices.
+     */
+    voice?: string;
+    /**
+     * Aws Access Key
+     *
+     * AWS access key ID with permission to invoke Nova 2 Sonic in Bedrock.
+     */
+    aws_access_key?: string;
+    /**
+     * Aws Secret Key
+     *
+     * AWS secret access key paired with the access key ID.
+     */
+    aws_secret_key?: string;
+    /**
+     * Aws Session Token
+     *
+     * Optional AWS session token for temporary IAM credentials.
+     */
+    aws_session_token?: string | null;
+    /**
+     * Aws Region
+     *
+     * AWS region where Nova 2 Sonic is enabled for the account.
+     */
+    aws_region?: string;
+    /**
+     * Endpointing Sensitivity
+     *
+     * How quickly Nova decides the user has stopped speaking. Leave blank to use the model default.
+     */
+    endpointing_sensitivity?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+    /**
+     * Temperature
+     *
+     * Sampling temperature for Nova 2 Sonic (greater than 0, up to 1).
+     */
+    temperature?: number;
+    /**
+     * Max Tokens
+     *
+     * Maximum response tokens.
+     */
+    max_tokens?: number;
+    /**
+     * Top P
+     *
+     * Nucleus-sampling threshold.
+     */
+    top_p?: number;
 };
 
 /**
@@ -583,7 +667,9 @@ export type ByokPipelineAiModelConfiguration = {
         provider: 'xai';
     } & XaittsConfiguration) | ({
         provider: 'lmnt';
-    } & LmntTtsConfiguration);
+    } & LmntTtsConfiguration) | ({
+        provider: 'speechify';
+    } & SpeechifyTtsConfiguration);
     /**
      * Stt
      */
@@ -649,7 +735,9 @@ export type ByokRealtimeAiModelConfiguration = {
         provider: 'google_vertex_realtime';
     } & GoogleVertexRealtimeLlmConfiguration) | ({
         provider: 'azure_realtime';
-    } & AzureRealtimeLlmConfiguration);
+    } & AzureRealtimeLlmConfiguration) | ({
+        provider: 'aws_nova_sonic';
+    } & AwsNovaSonicRealtimeLlmConfiguration);
     /**
      * Llm
      */
@@ -1009,6 +1097,10 @@ export type CampaignResponse = {
      * Max Concurrency
      */
     max_concurrency?: number | null;
+    /**
+     * Rate Limit Per Second
+     */
+    rate_limit_per_second?: number;
     schedule_config?: ScheduleConfigResponse | null;
     circuit_breaker?: CircuitBreakerConfigResponse | null;
     /**
@@ -1039,6 +1131,10 @@ export type CampaignResponse = {
      * Logs
      */
     logs?: Array<CampaignLogEntryResponse>;
+    /**
+     * Warnings
+     */
+    warnings?: Array<string>;
 };
 
 /**
@@ -1476,6 +1572,10 @@ export type CreateCampaignRequest = {
      * Max Concurrency
      */
     max_concurrency?: number | null;
+    /**
+     * Rate Limit Per Second
+     */
+    rate_limit_per_second?: number;
     schedule_config?: ScheduleConfigRequest | null;
     circuit_breaker?: CircuitBreakerConfigRequest | null;
 };
@@ -1598,7 +1698,7 @@ export type CreateToolRequest = {
      *
      * Tool category. Must match definition.type.
      */
-    category?: 'http_api' | 'end_call' | 'transfer_call' | 'calculator' | 'native' | 'integration' | 'mcp';
+    category?: 'http_api' | 'end_call' | 'transfer_call' | 'transfer_agent' | 'calculator' | 'native' | 'integration' | 'mcp';
     /**
      * Icon
      *
@@ -1623,6 +1723,8 @@ export type CreateToolRequest = {
     } & EndCallToolDefinition) | ({
         type: 'transfer_call';
     } & TransferCallToolDefinition) | ({
+        type: 'transfer_agent';
+    } & TransferAgentToolDefinition) | ({
         type: 'calculator';
     } & CalculatorToolDefinition) | ({
         type: 'mcp';
@@ -1907,6 +2009,12 @@ export type DeepgramSttConfiguration = {
      * Language code. 'multi' enables Nova-3 auto-detect and omits language hints for Flux multilingual auto-detect.
      */
     language?: string;
+    /**
+     * Base Url
+     *
+     * Deepgram API endpoint. This is what decides where call audio is processed: use https://api.eu.deepgram.com to keep processing inside the EU, or https://api.au.deepgram.com for Australia. The same API key works on every regional endpoint.
+     */
+    base_url?: string;
 };
 
 /**
@@ -1927,6 +2035,12 @@ export type DeepgramTtsConfiguration = {
      * Deepgram voice ID (model is inferred from the 'aura-N' prefix).
      */
     voice?: string;
+    /**
+     * Base Url
+     *
+     * Deepgram API endpoint. This is what decides where your text is processed: use https://api.eu.deepgram.com to keep processing inside the EU, or https://api.au.deepgram.com for Australia. The same API key works on every regional endpoint.
+     */
+    base_url?: string;
 };
 
 /**
@@ -2608,6 +2722,44 @@ export type EndTextChatSessionRequest = {
 };
 
 /**
+ * ExotelConfigurationRequest
+ */
+export type ExotelConfigurationRequest = {
+    /**
+     * Provider
+     */
+    provider?: 'exotel';
+    /**
+     * Account Sid
+     *
+     * Exotel Account SID
+     */
+    account_sid: string;
+    /**
+     * Api Key
+     *
+     * Exotel API Key
+     */
+    api_key: string;
+    /**
+     * Api Token
+     *
+     * Exotel API Token
+     */
+    api_token: string;
+    /**
+     * Api Base Url
+     *
+     * Exotel API base URL. Use https://api.in.exotel.com for India or https://api.exotel.com for other regions.
+     */
+    api_base_url?: string;
+    /**
+     * From Numbers
+     */
+    from_numbers?: Array<string>;
+};
+
+/**
  * ExternalPBXFieldMapping
  *
  * Map one gathered-context value to a provider-native field.
@@ -2759,12 +2911,6 @@ export type GoogleRealtimeLlmConfiguration = {
      * ISO 639-1 language code.
      */
     language?: string;
-    /**
-     * Temperature
-     *
-     * Sampling temperature for Gemini Live (0.0 to 2.0).
-     */
-    temperature?: number | null;
 };
 
 /**
@@ -2888,7 +3034,7 @@ export type GoogleVertexLlmConfiguration = {
     /**
      * Location
      *
-     * GCP region for the Vertex AI endpoint (e.g. 'global').
+     * Vertex AI location, which decides where requests are processed. 'eu' and 'us' are multi-regions that keep processing inside that geography; a single region such as 'europe-west4' pins it further; 'global' routes anywhere in the world and carries no data residency guarantee. Model availability varies by location.
      */
     location?: string;
     /**
@@ -2932,12 +3078,6 @@ export type GoogleVertexRealtimeLlmConfiguration = {
      */
     language?: string;
     /**
-     * Temperature
-     *
-     * Sampling temperature for Gemini Live (0.0 to 2.0).
-     */
-    temperature?: number | null;
-    /**
      * Project Id
      *
      * Google Cloud project ID for Vertex AI.
@@ -2946,7 +3086,7 @@ export type GoogleVertexRealtimeLlmConfiguration = {
     /**
      * Location
      *
-     * GCP region for the Vertex AI endpoint (e.g. 'global').
+     * Vertex AI location, which decides where requests are processed. 'eu' and 'us' are multi-regions that keep processing inside that geography; a single region such as 'europe-west4' pins it further; 'global' routes anywhere in the world and carries no data residency guarantee. Model availability varies by location.
      */
     location?: string;
     /**
@@ -3554,12 +3694,18 @@ export type LastCampaignSettingsResponse = {
      * Max Concurrency
      */
     max_concurrency?: number | null;
+    /**
+     * Rate Limit Per Second
+     */
+    rate_limit_per_second?: number;
     schedule_config?: ScheduleConfigResponse | null;
     circuit_breaker?: CircuitBreakerConfigResponse | null;
 };
 
 /**
  * LMNT
+ *
+ * Stored LMNT configurations remain readable after the provider's retirement.
  */
 export type LmntTtsConfiguration = {
     /**
@@ -4194,7 +4340,7 @@ export type OpenAillmService = {
 };
 
 /**
- * OpenAI Realtime
+ * OpenAI
  */
 export type OpenAiRealtimeLlmConfiguration = {
     /**
@@ -4208,7 +4354,7 @@ export type OpenAiRealtimeLlmConfiguration = {
     /**
      * Model
      *
-     * OpenAI realtime (speech-to-speech) model.
+     * Choose GPT-Live for full-duplex speech or a GPT-Realtime model.
      */
     model?: string;
     /**
@@ -4223,6 +4369,12 @@ export type OpenAiRealtimeLlmConfiguration = {
      * ISO 639-1 language code for input audio transcription (e.g. 'pt', 'es'). Improves transcription accuracy and latency. Leave unset to auto-detect.
      */
     language?: string | null;
+    /**
+     * Backend Model
+     *
+     * OpenAI Responses model that follows your workflow and calls tools. Uses the same API key; backend usage is billed separately from voice.
+     */
+    backend_model?: string;
 };
 
 /**
@@ -4670,6 +4822,40 @@ export type PlatformApiKeyResponse = {
      * Rotated
      */
     rotated: boolean;
+};
+
+/**
+ * PlatformBootstrapSuperadminRequest
+ *
+ * The one-time seed for a deployment's first platform super-admin.
+ */
+export type PlatformBootstrapSuperadminRequest = {
+    /**
+     * Email
+     */
+    email: string;
+    /**
+     * Password
+     */
+    password: string;
+};
+
+/**
+ * PlatformBootstrapSuperadminResponse
+ */
+export type PlatformBootstrapSuperadminResponse = {
+    /**
+     * User Id
+     */
+    user_id: number;
+    /**
+     * Email
+     */
+    email: string | null;
+    /**
+     * Created
+     */
+    created: boolean;
 };
 
 /**
@@ -5134,6 +5320,18 @@ export type PublicEmbedChatTurn = {
     status: string;
     user_message?: PublicEmbedChatMessage | null;
     assistant_message?: PublicEmbedChatMessage | null;
+};
+
+/**
+ * PublishWorkflowRequest
+ */
+export type PublishWorkflowRequest = {
+    /**
+     * Expected Definition Id
+     *
+     * Publish this exact draft definition; retries are idempotent.
+     */
+    expected_definition_id?: number | null;
 };
 
 /**
@@ -5924,6 +6122,38 @@ export type SpeachesTtsConfiguration = {
 };
 
 /**
+ * Speechify
+ */
+export type SpeechifyTtsConfiguration = {
+    /**
+     * Provider
+     */
+    provider?: 'speechify';
+    /**
+     * Api Key
+     */
+    api_key: string | Array<string>;
+    /**
+     * Model
+     *
+     * Speechify TTS model. 'simba-3.2' is the streaming-native English model with the lowest latency; 'simba-3.0' adds German, Spanish, French, Italian, and Portuguese.
+     */
+    model?: string;
+    /**
+     * Voice
+     *
+     * Speechify voice ID. Options are filtered to voices available for the selected model; a custom or cloned voice ID must support the selected model (see GET /v1/voices), or synthesis fails.
+     */
+    voice?: string;
+    /**
+     * Language
+     *
+     * Language code for synthesis (e.g. 'en', 'de', 'es', 'fr', 'it', 'pt-BR'). Options are filtered to the selected model's documented languages; simba-3.2 is documented as English-only.
+     */
+    language?: string;
+};
+
+/**
  * Speechmatics
  */
 export type SpeechmaticsSttConfiguration = {
@@ -5938,7 +6168,7 @@ export type SpeechmaticsSttConfiguration = {
     /**
      * Model
      *
-     * Speechmatics operating point: 'standard' or 'enhanced'.
+     * Speechmatics Agent STT model.
      */
     model?: string;
     /**
@@ -6662,6 +6892,8 @@ export type TelephonyConfigurationCreateRequest = {
     } & AriConfigurationRequest) | ({
         provider: 'cloudonix';
     } & CloudonixConfigurationRequest) | ({
+        provider: 'exotel';
+    } & ExotelConfigurationRequest) | ({
         provider: 'plivo';
     } & PlivoConfigurationRequest) | ({
         provider: 'telnyx';
@@ -6826,6 +7058,8 @@ export type TelephonyConfigurationUpdateRequest = {
     } & AriConfigurationRequest) | ({
         provider: 'cloudonix';
     } & CloudonixConfigurationRequest) | ({
+        provider: 'exotel';
+    } & ExotelConfigurationRequest) | ({
         provider: 'plivo';
     } & PlivoConfigurationRequest) | ({
         provider: 'telnyx';
@@ -7207,6 +7441,61 @@ export type ToolTestResponse = {
 };
 
 /**
+ * TransferAgentConfig
+ *
+ * Configuration for Transfer Agent tools.
+ *
+ * One tool, one destination. An agent that can hand the caller to several
+ * places gets several of these tools, and the model chooses between them the
+ * way it chooses between any other tools -- by their names and descriptions.
+ * That keeps the routing decision in the one place the model already reasons
+ * about, and leaves nothing to configure here but where the call goes.
+ *
+ * Everything about how a handoff sounds is fixed: the caller hears a ringer
+ * while the next agent is prepared, and that agent opens with its own
+ * configured greeting. Only the handover line is configurable, because it is
+ * caller-facing and Dograh runs in more than one language.
+ */
+export type TransferAgentConfig = {
+    /**
+     * Workflow Id
+     *
+     * Id of the Dograh agent to transfer to. Must be in the same organization, and must not be a speech-to-speech agent.
+     */
+    workflow_id: number;
+    /**
+     * Message
+     *
+     * Spoken by the current agent, in its own voice, before the caller is handed over. Supports template variables. Leave empty to hand over without saying anything.
+     */
+    message?: string;
+};
+
+/**
+ * TransferAgentToolDefinition
+ *
+ * Tool definition for Transfer Agent tools.
+ */
+export type TransferAgentToolDefinition = {
+    /**
+     * Schema Version
+     *
+     * Schema version.
+     */
+    schema_version?: number;
+    /**
+     * Type
+     *
+     * Tool type.
+     */
+    type: 'transfer_agent';
+    /**
+     * Transfer Agent configuration.
+     */
+    config: TransferAgentConfig;
+};
+
+/**
  * TransferCallConfig
  *
  * Configuration for Transfer Call tools.
@@ -7480,12 +7769,6 @@ export type TwilioConfigurationRequest = {
      * Twilio Auth Token
      */
     auth_token: string;
-    /**
-     * Amd Enabled
-     *
-     * Detect whether outbound calls are answered by a person or machine. Twilio may bill AMD as an additional per-call feature.
-     */
-    amd_enabled?: boolean;
 };
 
 /**
@@ -7527,6 +7810,10 @@ export type UpdateCampaignRequest = {
      * Max Concurrency
      */
     max_concurrency?: number | null;
+    /**
+     * Rate Limit Per Second
+     */
+    rate_limit_per_second?: number | null;
     schedule_config?: ScheduleConfigRequest | null;
     circuit_breaker?: CircuitBreakerConfigRequest | null;
 };
@@ -7596,6 +7883,8 @@ export type UpdateToolRequest = {
     } & EndCallToolDefinition) | ({
         type: 'transfer_call';
     } & TransferCallToolDefinition) | ({
+        type: 'transfer_agent';
+    } & TransferAgentToolDefinition) | ({
         type: 'calculator';
     } & CalculatorToolDefinition) | ({
         type: 'mcp';
@@ -8145,15 +8434,11 @@ export type WorkflowConfigurationDefaults = {
     /**
      * Turn Start Strategy
      */
-    turn_start_strategy?: 'default' | 'min_words' | 'provisional_vad';
+    turn_start_strategy?: 'default' | 'min_words';
     /**
      * Turn Start Min Words
      */
     turn_start_min_words?: number;
-    /**
-     * Provisional Vad Pause Secs
-     */
-    provisional_vad_pause_secs?: number;
     /**
      * Turn Stop Strategy
      */
@@ -8306,6 +8591,10 @@ export type WorkflowResponse = {
      * Current Definition Id
      */
     current_definition_id: number | null;
+    /**
+     * Draft Definition Id
+     */
+    draft_definition_id?: number | null;
     /**
      * Template Context Variables
      */
@@ -8845,6 +9134,27 @@ export type InitiateCallApiV1TelephonyInitiateCallPostResponses = {
     200: unknown;
 };
 
+export type HandleInboundRunApiV1TelephonyInboundRunGetData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/telephony/inbound/run';
+};
+
+export type HandleInboundRunApiV1TelephonyInboundRunGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+};
+
+export type HandleInboundRunApiV1TelephonyInboundRunGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type HandleInboundRunApiV1TelephonyInboundRunPostData = {
     body?: never;
     path?: never;
@@ -9030,6 +9340,38 @@ export type HandleCloudonixCdrApiV1TelephonyCloudonixCdrPostErrors = {
 };
 
 export type HandleCloudonixCdrApiV1TelephonyCloudonixCdrPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type HandleExotelStatusCallbackApiV1TelephonyExotelStatusCallbackWorkflowRunIdPostData = {
+    body?: never;
+    path: {
+        /**
+         * Workflow Run Id
+         */
+        workflow_run_id: number;
+    };
+    query?: never;
+    url: '/api/v1/telephony/exotel/status-callback/{workflow_run_id}';
+};
+
+export type HandleExotelStatusCallbackApiV1TelephonyExotelStatusCallbackWorkflowRunIdPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type HandleExotelStatusCallbackApiV1TelephonyExotelStatusCallbackWorkflowRunIdPostError = HandleExotelStatusCallbackApiV1TelephonyExotelStatusCallbackWorkflowRunIdPostErrors[keyof HandleExotelStatusCallbackApiV1TelephonyExotelStatusCallbackWorkflowRunIdPostErrors];
+
+export type HandleExotelStatusCallbackApiV1TelephonyExotelStatusCallbackWorkflowRunIdPostResponses = {
     /**
      * Successful Response
      */
@@ -9789,6 +10131,45 @@ export type GetWorkflowRunsApiV1SuperuserWorkflowRunsGetResponses = {
 
 export type GetWorkflowRunsApiV1SuperuserWorkflowRunsGetResponse = GetWorkflowRunsApiV1SuperuserWorkflowRunsGetResponses[keyof GetWorkflowRunsApiV1SuperuserWorkflowRunsGetResponses];
 
+export type BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostData = {
+    body: PlatformBootstrapSuperadminRequest;
+    headers?: {
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/superuser/bootstrap-superadmin';
+};
+
+export type BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostError = BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostErrors[keyof BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostErrors];
+
+export type BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: PlatformBootstrapSuperadminResponse;
+};
+
+export type BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostResponse = BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostResponses[keyof BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostResponses];
+
 export type MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostData = {
     body?: never;
     headers?: {
@@ -10142,7 +10523,10 @@ export type GetWorkflowVersionsApiV1WorkflowWorkflowIdVersionsGetResponses = {
 export type GetWorkflowVersionsApiV1WorkflowWorkflowIdVersionsGetResponse = GetWorkflowVersionsApiV1WorkflowWorkflowIdVersionsGetResponses[keyof GetWorkflowVersionsApiV1WorkflowWorkflowIdVersionsGetResponses];
 
 export type PublishWorkflowApiV1WorkflowWorkflowIdPublishPostData = {
-    body?: never;
+    /**
+     * Request
+     */
+    body?: PublishWorkflowRequest | null;
     headers?: {
         /**
          * Authorization
