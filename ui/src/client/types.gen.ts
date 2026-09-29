@@ -5377,6 +5377,12 @@ export type RecordingCreateRequestSchema = {
      */
     storage_key: string;
     /**
+     * Upload Token
+     *
+     * Server-issued token returned by the upload-url endpoint
+     */
+    upload_token: string;
+    /**
      * Metadata
      *
      * Optional metadata (file_size, duration, etc.)
@@ -5506,6 +5512,12 @@ export type RecordingUploadResponseSchema = {
      * Storage key where file will be uploaded
      */
     storage_key: string;
+    /**
+     * Upload Token
+     *
+     * Server-issued token required to create the recording
+     */
+    upload_token: string;
 };
 
 /**

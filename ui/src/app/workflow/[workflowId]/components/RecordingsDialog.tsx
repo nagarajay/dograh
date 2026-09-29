@@ -315,6 +315,7 @@ export const RecordingsDialog = ({
                         tts_voice_id: ttsVoiceId,
                         transcript: ready[idx].transcript.trim(),
                         storage_key: item.storage_key,
+                        upload_token: item.upload_token,
                         metadata: {
                             original_filename: ready[idx].file.name,
                             file_size_bytes: ready[idx].file.size,
