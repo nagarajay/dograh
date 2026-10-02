@@ -640,6 +640,8 @@ export type ByokPipelineAiModelConfiguration = {
     } & DeepgramTtsConfiguration) | ({
         provider: 'google';
     } & GoogleTtsConfiguration) | ({
+        provider: 'google_vertex';
+    } & GoogleVertexTtsConfiguration) | ({
         provider: 'openai';
     } & OpenAittsService) | ({
         provider: 'elevenlabs';
@@ -682,6 +684,8 @@ export type ByokPipelineAiModelConfiguration = {
     } & OpenAisttConfiguration) | ({
         provider: 'google';
     } & GoogleSttConfiguration) | ({
+        provider: 'google_vertex';
+    } & GoogleVertexSttConfiguration) | ({
         provider: 'dograh';
     } & DograhSttService) | ({
         provider: 'speechmatics';
@@ -713,7 +717,9 @@ export type ByokPipelineAiModelConfiguration = {
         provider: 'azure';
     } & AzureOpenAiEmbeddingsConfiguration) | ({
         provider: 'dograh';
-    } & DograhEmbeddingsConfiguration) | null;
+    } & DograhEmbeddingsConfiguration) | ({
+        provider: 'google_vertex';
+    } & GoogleVertexEmbeddingsConfiguration) | null;
 };
 
 /**
@@ -779,7 +785,9 @@ export type ByokRealtimeAiModelConfiguration = {
         provider: 'azure';
     } & AzureOpenAiEmbeddingsConfiguration) | ({
         provider: 'dograh';
-    } & DograhEmbeddingsConfiguration) | null;
+    } & DograhEmbeddingsConfiguration) | ({
+        provider: 'google_vertex';
+    } & GoogleVertexEmbeddingsConfiguration) | null;
 };
 
 /**
@@ -3008,6 +3016,46 @@ export type GoogleTtsConfiguration = {
 /**
  * Google Vertex
  */
+export type GoogleVertexEmbeddingsConfiguration = {
+    /**
+     * Provider
+     */
+    provider?: 'google_vertex';
+    /**
+     * Api Key
+     *
+     * Vertex API key. Not yet verified for embeddings; setting it is rejected. Leave blank.
+     */
+    api_key?: string | Array<string> | null;
+    /**
+     * Model
+     *
+     * Vertex AI embedding model. Dograh requests 1536-dimensional vectors (output_dimensionality) to match its knowledge-base index.
+     */
+    model?: string;
+    /**
+     * Project Id
+     *
+     * Google Cloud project ID. Required for service-account / ADC.
+     */
+    project_id?: string | null;
+    /**
+     * Location
+     *
+     * Vertex AI location, for example 'global' or 'us-central1'.
+     */
+    location?: string;
+    /**
+     * Credentials
+     *
+     * Paste the entire service-account JSON. If omitted, the server falls back to Application Default Credentials (ADC).
+     */
+    credentials?: string | null;
+};
+
+/**
+ * Google Vertex
+ */
 export type GoogleVertexLlmConfiguration = {
     /**
      * Provider
@@ -3016,7 +3064,7 @@ export type GoogleVertexLlmConfiguration = {
     /**
      * Api Key
      *
-     * Not used for Vertex AI — authentication is via the service account in `credentials` (or ADC). Leave blank.
+     * Optional Vertex AI API key (express mode). Use instead of `credentials`, not together with it. Leave blank for service account / ADC.
      */
     api_key?: string | Array<string> | null;
     /**
@@ -3028,19 +3076,19 @@ export type GoogleVertexLlmConfiguration = {
     /**
      * Project Id
      *
-     * Google Cloud project ID for Vertex AI.
+     * Google Cloud project ID for Vertex AI. Required with service-account or ADC authentication; not used with a Vertex API key.
      */
-    project_id: string;
+    project_id?: string | null;
     /**
      * Location
      *
-     * Vertex AI location, which decides where requests are processed. 'eu' and 'us' are multi-regions that keep processing inside that geography; a single region such as 'europe-west4' pins it further; 'global' routes anywhere in the world and carries no data residency guarantee. Model availability varies by location.
+     * Vertex AI location, which decides where requests are processed. 'eu' and 'us' are multi-regions that keep processing inside that geography; a single region such as 'europe-west4' pins it further; 'global' routes anywhere in the world and carries no data residency guarantee. Model availability varies by location. Ignored with a Vertex API key (express mode has no location).
      */
     location?: string;
     /**
      * Credentials
      *
-     * Paste the entire service-account JSON file contents. If omitted, falls back to Application Default Credentials (ADC).
+     * Paste the entire service-account JSON file contents. If omitted and no API key is set, falls back to Application Default Credentials (ADC).
      */
     credentials?: string | null;
 };
@@ -3093,6 +3141,104 @@ export type GoogleVertexRealtimeLlmConfiguration = {
      * Credentials
      *
      * Paste the entire service-account JSON file contents. If omitted, falls back to Application Default Credentials (ADC).
+     */
+    credentials?: string | null;
+};
+
+/**
+ * Google Vertex
+ */
+export type GoogleVertexSttConfiguration = {
+    /**
+     * Provider
+     */
+    provider?: 'google_vertex';
+    /**
+     * Api Key
+     *
+     * Vertex API key. Google does not document API-key authentication for Gemini transcription yet; setting it is rejected. Leave blank.
+     */
+    api_key?: string | Array<string> | null;
+    /**
+     * Model
+     *
+     * Gemini transcription model on Vertex AI, streamed over the Live API. Preview model; only served from the 'global' location.
+     */
+    model?: string;
+    /**
+     * Language
+     *
+     * Optional BCP-47 language hint (for example 'en-US'). Leave blank to let the model detect the language per utterance.
+     */
+    language?: string | null;
+    /**
+     * Project Id
+     *
+     * Google Cloud project ID. Required for service-account / ADC.
+     */
+    project_id?: string | null;
+    /**
+     * Location
+     *
+     * Vertex AI location. Gemini 3.5 Transcribe is served from 'global'.
+     */
+    location?: string;
+    /**
+     * Credentials
+     *
+     * Paste the entire service-account JSON. If omitted, the server falls back to Application Default Credentials (ADC).
+     */
+    credentials?: string | null;
+};
+
+/**
+ * Google Vertex
+ */
+export type GoogleVertexTtsConfiguration = {
+    /**
+     * Provider
+     */
+    provider?: 'google_vertex';
+    /**
+     * Api Key
+     *
+     * Not supported: Google documents service-account / OAuth credentials only for Gemini-TTS. Leave blank.
+     */
+    api_key?: string | Array<string> | null;
+    /**
+     * Model
+     *
+     * Gemini-TTS model, served by Cloud Text-to-Speech with Vertex/Cloud credentials (service account or ADC).
+     */
+    model?: string;
+    /**
+     * Voice
+     *
+     * Gemini-TTS voice name (for example Kore, Puck, Charon).
+     */
+    voice?: string;
+    /**
+     * Language
+     *
+     * BCP-47 language code for synthesis.
+     */
+    language?: string;
+    /**
+     * Prompt
+     *
+     * Optional natural-language style instruction (tone, pace, accent).
+     */
+    prompt?: string | null;
+    /**
+     * Location
+     *
+     * Cloud Text-to-Speech endpoint: 'global', 'us', 'eu' or a region. gemini-3.1-flash-tts-preview is only served from 'global'.
+     */
+    location?: string;
+    /**
+     * Credentials
+     *
+     * Paste the entire Google Cloud service-account JSON. If omitted, the server falls back to Application Default Credentials (ADC).
      */
     credentials?: string | null;
 };
@@ -10478,6 +10624,59 @@ export type GetWorkflowApiV1WorkflowFetchWorkflowIdGetResponses = {
 };
 
 export type GetWorkflowApiV1WorkflowFetchWorkflowIdGetResponse = GetWorkflowApiV1WorkflowFetchWorkflowIdGetResponses[keyof GetWorkflowApiV1WorkflowFetchWorkflowIdGetResponses];
+
+export type GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+    };
+    query?: {
+        /**
+         * Version
+         */
+        version?: 'published' | 'draft';
+    };
+    url: '/api/v1/workflow/{workflow_id}/effective-model-configuration';
+};
+
+export type GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetError = GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetErrors[keyof GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetErrors];
+
+export type GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetResponses = {
+    /**
+     * Response Get Workflow Effective Model Configuration Api V1 Workflow  Workflow Id  Effective Model Configuration Get
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetResponse = GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetResponses[keyof GetWorkflowEffectiveModelConfigurationApiV1WorkflowWorkflowIdEffectiveModelConfigurationGetResponses];
 
 export type GetWorkflowVersionsApiV1WorkflowWorkflowIdVersionsGetData = {
     body?: never;

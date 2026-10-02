@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, Loader2, ShieldAlert, UserCog } from "lucide-react";
+import { AudioLines, Building2, Loader2, ShieldAlert, UserCog } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 
 const SUPERADMIN_NAV = [
     { title: "Organizations", href: "/superadmin/organizations", icon: Building2 },
+    { title: "Gemini TTS Samples", href: "/superadmin/gemini-tts", icon: AudioLines },
     { title: "Agent Runs", href: "/superadmin/runs", icon: ShieldAlert },
     { title: "Impersonate", href: "/superadmin", icon: UserCog },
 ];

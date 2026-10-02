@@ -42,7 +42,11 @@ The relevant required variables for each mode are noted in the descriptions belo
 | `OSS_JWT_SECRET` | N/A | **Required for OSS deployments.** Secret used to sign JWT tokens. Must be set to a strong random value in production |
 | `OSS_JWT_EXPIRY_HOURS` | `720` | JWT token lifetime in hours (default: 30 days) |
 | `ENABLE_SIGNUP` | `true` | Set to `false` to disable public signup on invite-only installs — `POST /api/v1/auth/signup` returns 403 and the login page hides the Sign up link |
-| `PLATFORM_ADMIN_API_KEY` | unset | Server-to-server credential for the platform provisioning endpoints (`POST /api/v1/superuser/organizations` and `POST /api/v1/superuser/organizations/{id}/api-keys`), presented as the `X-Platform-Admin-Key` header. Unset — or shorter than 32 characters — leaves both endpoints returning 503, so an install that never provisions from outside is closed by default. This is how an invite-only install creates tenants with `ENABLE_SIGNUP=false` |
+| `PLATFORM_ADMIN_API_KEY` | unset | Canonical server-to-server credential for platform-admin endpoints, presented as the `X-Platform-Admin-Key` header. `DOGRAH_PLATFORM_ADMIN_API_KEY` is accepted as a compatibility alias. Unset — or shorter than 32 characters — leaves these endpoints returning 503. |
+| `GEMINI_TTS_SAMPLE_API_KEY` | unset | Platform-owned Vertex API key for explicitly queued Gemini-TTS sample generation; never a tenant/workflow key |
+| `GEMINI_TTS_SAMPLE_PROJECT_ID` | unset | Project billed for platform-owned Gemini-TTS sample generation |
+| `GEMINI_TTS_SAMPLE_LOCATION` | `global` | Vertex location for sample generation; Gemini 3.1 TTS requires `global` |
+| `GEMINI_TTS_SAMPLE_CREDENTIAL_REF` | unset | Non-secret platform secret-manager reference for operator bookkeeping |
 
 <Warning>
 Never use the placeholder `OSS_JWT_SECRET` in a production deployment. Generate a strong random secret and store it securely.

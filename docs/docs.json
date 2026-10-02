@@ -231,6 +231,12 @@
                 ]
               },
               {
+                "group": "Model Slots",
+                "pages": [
+                  "api-reference/model-slots"
+                ]
+              },
+              {
                 "group": "Campaigns",
                 "pages": [
                   "api-reference/campaigns",

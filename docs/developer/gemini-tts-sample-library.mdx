@@ -1,0 +1,136 @@
+# Gemini-TTS sample library contract
+
+All endpoints below are platform-admin endpoints under
+`/api/v1/superuser/gemini-tts/sample-packs`. They accept either an interactive
+super-admin `Authorization: Bearer ...` session or the server-to-server
+`X-Platform-Admin-Key`. They never call Google while reading.
+
+Pack settings are immutable: `model_id`, resolved `catalog_revision`,
+`location`, `language`, `style_text`, and `sample_text`. `voice_id` is the
+canonical Google voice ID from that model/revision catalog.
+
+## 1. Generate all voices
+
+`POST /sample-packs`
+
+Request:
+
+```json
+{
+  "model_id": "gemini-3.1-flash-tts-preview",
+  "voice_id": "Kore",
+  "catalog_revision": "<optional-current-revision>",
+  "location": "global",
+  "language": "en-US",
+  "style_text": "warm and conversational",
+  "sample_text": "Hello, this is a voice sample."
+}
+```
+
+Returns `202` with the pack and exactly one queued asset when `voice_id` is
+supplied. Omit `voice_id` to preserve the existing Generate all voices action;
+that form queues all 30 catalog voices. Repeating the same request is
+idempotent and does not requeue completed work. Creating the same pack later
+without `voice_id` adds and queues only catalog voices that are still missing.
+
+## 2. Generate one voice
+
+`POST /sample-packs/{pack_id}/voices/{voice_id}/generate`
+
+Request for a voice with no current sample:
+
+```json
+{"regenerate": false}
+```
+
+Returns `202` with the pack. Exactly one asset job is queued. Unknown voices,
+or voices outside the pack's pinned model/revision, return `422`. A voice that
+is already `queued` or `running` returns `409` with that state. A failed asset
+must use the failed-only retry endpoint.
+
+## 3. Regenerate one completed voice
+
+Use the same endpoint with:
+
+```json
+{"regenerate": true}
+```
+
+Without this explicit confirmation, a completed voice returns `409` explaining
+that a new Google TTS request for one voice will be sent and may incur usage.
+Successful regeneration creates a new immutable version and makes it current;
+the previous version remains available in the pack response.
+
+## 4. Read current and prior versions
+
+`GET /sample-packs/{pack_id}` (or `GET /sample-packs`)
+
+The `assets` array contains all immutable versions. Each asset includes
+`version` and `is_current`; clients should play the completed asset where
+`is_current` is true. `sample_url` is signed for one hour. Prior versions can
+be inspected or played with:
+
+`GET /sample-packs/{pack_id}/assets/{asset_id}/playback-url`
+
+The model-slot catalog also returns only the current completed sample for each
+voice by default.
+
+## 5. Recover failed voices only
+
+`POST /sample-packs/{pack_id}/retry` accepts no body and returns `202` with the
+existing pack response. It creates exactly one new immutable version for each
+canonical voice that has failed history but no current completed sample and no
+queued/running version. Historical failures are retained. Playable voices are
+skipped even when they have older failed versions. A fully playable pack is a
+successful no-op, with zero selected/enqueued jobs.
+
+For a controlled platform-admin diagnostic, append `?limit=2` to cap the number
+of selected voices using the exact same bulk scheduling path. Omit the query
+parameter for one recovery pass over all eligible failed voices.
+
+The response adds optional `retry_summary` without an envelope change:
+
+```typescript
+type GeminiTtsRetrySummary = {
+  operation_id: string;
+  eligible_voices: number;
+  skipped_playable_voices: number;
+  skipped_active_voices: number;
+  selected_voices: number;
+  enqueued_jobs: number;
+  enqueue_conflicts: number;
+  enqueue_failures: number;
+  asset_ids: number[];
+  job_ids: string[];
+};
+```
+
+The pack response also adds `total_voices`, `playable_voices`, `eligible_voices`,
+and `active_voices`. Existing `total_assets`, `completed_assets`, and
+`failed_assets` remain version totals. Pack status tracks required catalog
+voices: completed when all are playable, running/queued while missing voices
+have active work, partial when some are playable, otherwise failed. Historical
+failed versions do not prevent completion. Regeneration of an already playable
+voice keeps its current audio available.
+
+A scheduling conflict or failure returns `503` with
+`detail: {message: string, retry_summary: GeminiTtsRetrySummary}`. Other jobs in
+that operation may have been accepted: poll the pack before taking action.
+Failed enqueue reservations become failed versions if still unclaimed, so they
+cannot remain queued without a runnable job. A late job cannot claim them.
+An already claimed job retains worker ownership. No enqueue/provider retries
+are automatic. New versions use new ARQ IDs, independent of retained results.
+
+`GEMINI_TTS_SAMPLE_CONCURRENCY` controls Redis-backed provider slots across all
+API/ARQ processes (default `1`, valid `1..10`; use the same value for all
+workers). ARQ can hold ten jobs per worker while jobs wait for a provider slot.
+Waiting does not send Google requests; the 120-second provider deadline begins
+only after slot acquisition. Every sample permits exactly one outbound request.
+Operation IDs persist in asset generation metadata and correlate selection,
+enqueue, worker claim and final outcomes. No text, audio, credentials or signed
+URLs are logged.
+
+The AVSIQ consumer can keep its existing bodyless retry call. Poll the pack,
+play only completed `is_current: true` assets, and use voice-level eligibility
+(or derive it from version history) to control the retry button. Do not use
+`failed_assets` to label a fully playable pack as broken or offer recovery.

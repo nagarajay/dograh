@@ -1,0 +1,341 @@
+---
+title: "Per-workflow model slots"
+description: "Independent, versioned LLM / STT / TTS / embeddings settings per workflow, with draft, validate, publish, readback and rollback"
+---
+
+Each workflow has four **slots**: `llm`, `stt`, `tts`, `embeddings`. A slot is versioned on its own. Editing or publishing one slot of one workflow never touches another slot or another workflow.
+
+Dograh has workflows, not agents. An AVSIQ agent that spans several workflows (for example a transfer target) must be mapped to its workflow ids by AVSIQ. Call each workflow separately; `GET /model-slots?workflow_ids=` reads a group in one request. Group publish is **not** atomic.
+
+All routes are under `/api/v1`, authenticate with `X-API-Key` (or a user token), and are scoped to the caller's organization. A workflow or credential of another organization returns `404`.
+
+## What is live
+
+| Workflow state | Where its live value comes from (`source`) |
+|---|---|
+| Slot published | `workflow_slot` |
+| No slot rows, legacy override present | `legacy_workflow_override` |
+| No slot rows, no override | `organization_default_inherited` (**still follows the organization default at call time**) |
+| Nothing configured anywhere | `unconfigured` |
+
+Existing workflows keep their current behavior until a slot is published for them (or they are backfilled with `scripts/backfill_workflow_slots.py`). Runtime reads only **published** slots; drafts never affect calls. If a published slot cannot be resolved (revoked credential, missing encryption key) the call fails; it does not fall back to another provider.
+
+## Template on create (`WORKFLOW_SLOT_TEMPLATE_ON_CREATE=true`)
+
+Off by default. When on, a new workflow (create, create-from-template, duplicate, template duplicate) copies the organization default into its own slots and never inherits later default changes. This **fails closed**:
+
+- If the copy fails (no encryption key, empty organization configuration, database error), the create call returns `503` with `code: "slot_template_incomplete"`, the new `workflow_id`, and a `retry` hint. The workflow exists but has `template_status: "pending"` and **refuses to run**; it does not fall back to organization defaults.
+- Retry with `POST /api/v1/workflow/{workflow_id}/model-slots/apply-template`. Success clears `pending`; retrying a non-pending workflow returns `409 template_not_pending`.
+- Workflows created by other paths (for example the MCP `create_workflow` tool) also start `pending` while the flag is on and need the same retry call.
+
+## Credentials (write-only)
+
+Secrets are never part of slot config. Create a credential, then reference it. The value is encrypted at rest and never returned.
+
+```http
+POST /api/v1/model-credentials
+{
+  "kind": "api_key",
+  "label": "vertex-prod",
+  "source_ref": "vault:avsiq/vertex-prod#7",
+  "secret": { "api_key": "<value from AVSIQ Vault>" }
+}
+```
+
+```json
+{ "credential_ref": "cred_9f2c1a7b34d05e6a81c2", "version": 1, "kind": "api_key",
+  "label": "vertex-prod", "source_ref": "vault:avsiq/vertex-prod#7",
+  "key_id": "a1b2c3d4", "created_at": "2026-09-30T09:00:00Z", "revoked_at": null }
+```
+
+- `kind`: `api_key` (`api_key`), `service_account_json` (`credentials`), `aws_iam` (`aws_access_key`, `aws_secret_key`, `aws_session_token`).
+- `source_ref` is an opaque, non-secret pointer to AVSIQ Vault. Dograh does **not** read Vault; AVSIQ pushes the value.
+- **Rotation**: `POST` again with the same `credential_ref`; a new `version` is created. Slots keep the version they pinned until a new slot version is published.
+- `GET /model-credentials` lists metadata. `DELETE /model-credentials/{ref}/versions/{v}` revokes; refused with `409 credential_in_use` while a published slot pins it.
+- Needs `PROVIDER_CREDENTIAL_ENCRYPTION_KEYS` on the server, otherwise `503 secret_store_unavailable`.
+
+## Readback
+
+```http
+GET /api/v1/workflow/{workflow_id}/model-slots
+```
+
+```json
+{
+  "workflow_id": 12, "workflow_uuid": "…",
+  "slots": [
+    { "slot": "llm", "revision": 2, "source": "workflow_slot",
+      "published_version": 1, "draft_version": null,
+      "published": { "version": 1, "state": "published",
+        "config": { "provider": "google_vertex", "model": "gemini-3.5-flash", "location": "global" },
+        "credential": { "credential_ref": "cred_9f2c1a7b34d05e6a81c2", "version": 1 },
+        "validation_status": "valid", "origin": "edit" },
+      "draft": null,
+      "effective": { "provider": "google_vertex", "model": "gemini-3.5-flash",
+        "credential": { "kind": "api_key", "configured": true } } },
+    { "slot": "stt", "revision": 0, "source": "organization_default_inherited",
+      "published_version": null, "draft_version": null, "published": null, "draft": null,
+      "effective": { "provider": "deepgram", "model": "nova-3-general",
+        "credential": { "kind": "api_key", "configured": true } } }
+  ]
+}
+```
+
+`revision` is the optimistic-lock counter for that slot. Send it back as `expected_revision`.
+
+## Gemini-TTS model and voice catalog
+
+AVSIQ can populate a model/voice selector without reading credentials or making
+a Google request:
+
+```http
+GET /api/v1/model-slots/google-vertex/tts/catalog
+GET /api/v1/model-slots/google-vertex/tts/catalog?model=gemini-3.1-flash-tts-preview
+```
+
+The tenant-facing route above requires the normal selected-organization user
+authentication. The AVSIQ Admin sample-library page must use the separate
+platform-admin route instead:
+
+```http
+GET /api/v1/superuser/gemini-tts/catalog
+X-Platform-Admin-Key: <platform-admin-key>
+```
+
+This route accepts the same query filters and returns the same response model.
+It rejects `X-API-Key` tenant credentials; never send either platform or
+Google generation credentials to the browser.
+
+The response is read-only and lists the exact supported model IDs, a stable
+`catalog_revision` for each model, documented
+locations, lifecycle, raw output format, voice IDs, and Google’s documented
+gender labels. `gemini-3.1-flash-tts-preview` is Preview and is listed only at
+`global`; its supported Vertex output is raw mono PCM, 16-bit, 24 kHz, without
+a WAV header. The existing API-key path requires a project ID and sends the
+complete resource
+`projects/{project}/locations/{location}/publishers/google/models/{model}`.
+
+Google embeds voice demonstrations in its official Gemini-TTS documentation,
+but the page does not expose stable, verified per-voice media URLs in the
+documentation surface. Each catalog voice therefore returns that official page
+as `demo_url`, `sample_url: null`, and `sample_reuse: "official_demo_page_only"`.
+Dograh does not synthesize, cache, scrape, or request a preview sample.
+
+## Stored Gemini-TTS sample packs
+
+Sample-pack lifecycle APIs are platform-admin-only under
+`/api/v1/superuser/gemini-tts/sample-packs`. They require
+`X-Platform-Admin-Key`; tenant API keys and interactive superuser sessions are
+rejected. The request contains no credential:
+
+```http
+POST /api/v1/superuser/gemini-tts/sample-packs
+{
+  "model_id": "gemini-3.1-flash-tts-preview",
+  "catalog_revision": "<optional-current-revision>",
+  "location": "global",
+  "language": "en-US",
+  "style_text": "Speak in a warm, clear, friendly voice.",
+  "sample_text": "Hello, this is a sample of my voice."
+}
+```
+
+Creation is idempotent over the exact model, catalog revision, location,
+language, style text, and spoken text. It creates one queued asset per current
+catalog voice and enqueues one ARQ job per asset. A completed pack and its
+assets are immutable. Use `GET /{pack_id}` for progress, `POST /{pack_id}/retry`
+to retry only failed voices, and
+`GET /{pack_id}/assets/{asset_id}/playback-url` for a one-hour authenticated
+signed URL. `GET /superuser/gemini-tts/sample-packs?completed_only=true` lists
+completed packs with their asset URLs.
+
+The catalog accepts exact matching filters:
+`?model=...&catalog_revision=...&location=global&language=en-US&context=...&sample_text=...`.
+`language`, `context`, and `sample_text` must all be supplied before stored
+assets are looked up; `model`, `catalog_revision`, and `location` further narrow
+the exact match. Matching completed stored assets appear in each voice’s
+`samples` list, with the pack dimensions repeated in every sample object.
+Catalog and playback read paths never call Google. A catalog read without the
+three generation-input filters only returns metadata and performs no storage
+lookup.
+
+Generation requires deployment-secret configuration:
+`GEMINI_TTS_SAMPLE_API_KEY`, `GEMINI_TTS_SAMPLE_PROJECT_ID`, and
+`GEMINI_TTS_SAMPLE_LOCATION` (normally `global`) in both the API and every ARQ
+worker process. `GEMINI_TTS_SAMPLE_API_KEY` is secret; the project and location
+are bookkeeping/configuration. `GEMINI_TTS_SAMPLE_CREDENTIAL_REF` is an
+optional non-secret secret-manager reference for operator bookkeeping; this
+code does not resolve it. Dograh does not resolve tenant credentials or accept
+secrets in the request body. If the platform credential is not injected, pack
+creation returns `503` and creates no pack.
+
+`X-Platform-Admin-Key` must contain the configured `PLATFORM_ADMIN_API_KEY`.
+Existing integrations may provide the same value through the compatibility
+environment variable `DOGRAH_PLATFORM_ADMIN_API_KEY`. Neither this key nor
+`GEMINI_TTS_SAMPLE_API_KEY` may be sent to a browser.
+
+The playback response is `{ "asset_id": 123, "mime_type": "audio/wav", "url": "..." }`.
+Dograh stores signed 16-bit little-endian mono PCM as a browser-playable WAV at
+24 kHz (`audio/wav`), with duration computed from the PCM frame count. With the
+S3 backend the URL is a one-hour presigned GET URL and is playable directly by a
+browser. The current MinIO backend returns its configured public bucket URL;
+that URL is not signed and has no enforced expiry. Deployments requiring
+authenticated Admin-UI playback should use S3/private storage, or add a
+platform-admin-authenticated streaming proxy that validates the pack/asset and
+streams the object without exposing the MinIO URL. That proxy is not part of
+this change.
+
+The migration is additive but has not been applied here. Apply its prerequisite
+`c8f3a1d95e72_add_workflow_slot_settings` first, then
+`d7e4f6a8b901_add_gemini_tts_sample_library`. The checked-in migration graph
+has one head (`d7e4f6a8b901`) because the prior fork/upstream heads were already
+joined by `e5c81a3f6b29`; normal `alembic upgrade head` is therefore not
+ambiguous in this checkout.
+
+The additive migration `d7e4f6a8b901_add_gemini_tts_sample_library` creates
+`gemini_tts_sample_packs` and `gemini_tts_sample_assets`; its downgrade removes
+only those new tables and their objects.
+
+## Edit → validate → publish
+
+1. **Draft** (does not go live; replaces any earlier draft of the slot):
+
+```http
+PUT /api/v1/workflow/{workflow_id}/model-slots/{slot}/draft
+{
+  "expected_revision": 0,
+  "config": { "provider": "google_vertex", "model": "gemini-3.5-flash", "location": "global" },
+  "credential": { "credential_ref": "cred_9f2c1a7b34d05e6a81c2", "version": 1 },
+  "change_note": "move to Vertex"
+}
+```
+Returns the draft version object (`version`, `state: "draft"`, …). Omit `credential.version` to pin the latest active one. The response and every later readback show the pinned version.
+
+2. **Validate** (provider rules, Vertex catalogue and auth rules, embedding compatibility, live provider check where the provider has one):
+
+```http
+POST /api/v1/workflow/{workflow_id}/model-slots/{slot}/draft/{version}/validate
+```
+```json
+{ "slot": "llm", "version": 1, "status": "valid", "errors": [] }
+```
+
+3. **Publish** (needs `status: valid`; `expected_revision` is the revision after the draft save):
+
+```http
+POST /api/v1/workflow/{workflow_id}/model-slots/{slot}/publish
+{ "version": 1, "expected_revision": 1 }
+```
+
+4. **Rollback** re-publishes an earlier published version, with the credential version it pinned, as a new version:
+
+```http
+POST /api/v1/workflow/{workflow_id}/model-slots/{slot}/rollback
+{ "to_version": 1, "expected_revision": 4, "change_note": "revert" }
+```
+
+5. **History**: `GET /api/v1/workflow/{workflow_id}/model-slots/{slot}/history?limit=50`.
+
+## Errors
+
+`detail` is `{ "code", "message", … }`.
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 404 | `workflow_not_found`, `credential_not_found`, `version_not_found` | Not found in your organization |
+| 409 | `stale_revision` (+ `current_revision`) | Slot changed since you read it; re-read and retry |
+| 409 | `invalid_transition`, `not_a_draft` | Publish before validation, wrong version, already live |
+| 409 | `embedding_index_incompatible`, `embedding_dimension_unsupported` | See below |
+| 409 | `credential_in_use` | Revoke refused |
+| 422 | `unknown_provider`, `invalid_config`, `secret_in_config`, `credential_required`, `credential_kind_mismatch`, `credential_revoked`, `vertex_auth_not_supported` | Rejected input; messages never echo secret values |
+| 503 | `secret_store_unavailable` | Server has no encryption key |
+
+## Vertex authentication
+
+The Vertex catalogue decides which auth each model may use. A Vertex **API key** is accepted for the LLM slot and for Gemini TTS (Vertex API path, see below). Gemini transcription accepts a key only with `project_id` (see below). It is refused for embeddings (`vertex_auth_not_supported`) until a live probe proves the Google API accepts it. Use `service_account_json` (or no credential for Application Default Credentials, with `project_id`) for those.
+
+## Gemini speech on Vertex (STT and TTS)
+
+Use `provider: "google_vertex"` for Gemini speech. (`provider: "google"` is the separate Cloud Speech-to-Text / Text-to-Speech product family, not Gemini.)
+
+| Slot | `model` | Google API | Credential |
+|---|---|---|---|
+| `stt` | `gemini-3.5-transcribe-live-preview` (preview, `global` only) | Live API `BidiGenerateContent` | `service_account_json`, none (ADC, with `project_id`), or `api_key` **with `project_id`** (location `global`). Google does not document keys for the Live API; a live probe succeeded with a complete `projects/{project}/locations/global/publishers/google/models/{model}` resource. Without `project_id` the key route is refused. |
+| `tts` | `gemini-2.5-flash-tts`, `gemini-2.5-pro-tts`, `gemini-2.5-flash-lite-preview-tts`, `gemini-3.1-flash-tts-preview` | Service account / ADC: Cloud Text-to-Speech `StreamingSynthesize`. **API key:** Vertex API `streamGenerateContent` | `service_account_json`, none (ADC), or `api_key` (location `global`; add `project_id` to send the complete resource) |
+
+An API-key `tts` slot is accepted because `streamGenerateContent` is a method Google documents as key-capable. Google does not list keys per model. Without `project_id`, Google resolves the project and location from the key's account (one org-49 key resolved to `asia-southeast1`, where `gemini-2.5-flash-tts` returned 404); with `project_id`, Dograh sends the complete resource at `global`, which succeeded in a live probe. Run `scripts/probe_gemini_speech.py` before publishing, and use a service account when the model must run in a specific location. Express-mode keys bill against the express-mode free tier, which Google states is separate from the $300 Free Program credit. To spend trial credit, use a project with the Free Trial billing account and a service account (or a Google Cloud API key created in that project).
+
+```json
+// PUT .../model-slots/stt/draft
+{ "expected_revision": 0,
+  "config": { "provider": "google_vertex", "model": "gemini-3.5-transcribe-live-preview",
+              "language": "en-US", "project_id": "<project>", "location": "global" },
+  "credential": { "credential_ref": "cred_...", "version": 1 } }
+
+// PUT .../model-slots/tts/draft
+{ "expected_revision": 0,
+  "config": { "provider": "google_vertex", "model": "gemini-2.5-flash-tts", "voice": "Kore",
+              "language": "en-US", "location": "global" },
+  "credential": { "credential_ref": "cred_...", "version": 1 } }
+```
+
+Store a service account once with `POST /api/v1/model-credentials` and `{"kind":"service_account_json","secret":{"credentials":"<whole JSON string>"}}`, or an API key with `{"kind":"api_key","secret":{"api_key":"<key>"}}`. The service account needs `roles/aiplatform.user`, and the Cloud Text-to-Speech API enabled for the service-account TTS path. Errors from Google are scrubbed of the key before they reach logs or the transcript.
+
+### Evidence level of the API-key routes
+
+| Route | Evidence |
+|---|---|
+| Gemini TTS, service account / ADC (Cloud Text-to-Speech) | Documented by Google |
+| Gemini TTS, API key, Vertex API `streamGenerateContent` | Method documented by Google; per-model support not documented |
+| Gemini TTS or transcription, API key **with a complete `projects/{project}/locations/global/publishers/google/models/{model}` resource** | **Live-proven on 2026-10-01 (org 49 key), not documented by Google.** May change or stop working without notice. |
+| Gemini transcription, service account / ADC | Documented by Google |
+
+The catalogue records these as `documented`, `method_documented` and `probe_verified` respectively. Express-mode keys without a project are not sent a complete resource, and Google then picks the location from the key's account.
+
+### Cut-over and recovery for a workflow with no stt/tts history
+
+A first publish has no earlier version to roll back to, and there is no "unpublish". So **before** publishing Gemini speech, freeze what the workflow runs today as published v1 (an operator step, run in the API image against the right database; the dry run changes nothing):
+
+```
+python -m scripts.backfill_workflow_slots --workflow-ids 77 --organization-id 49          # dry run
+python -m scripts.backfill_workflow_slots --workflow-ids 77 --organization-id 49 --apply  # writes v1 for slots without history
+```
+
+Slots that already have history (here `llm`) are skipped, and the script reports `effective_unchanged`. After the cut-over, recover with `POST .../model-slots/{slot}/rollback` and `{"to_version": 1, "expected_revision": <current>}`, which republishes the frozen config and the credential version it pinned. Rolling back one slot never touches the others.
+
+### Request contracts for workflow 77 (org 49)
+
+Read the current revision of each slot first: `GET /api/v1/workflow/77/model-slots`. Use that `revision` as `expected_revision` on the draft; the publish uses `revision + 1`; a later rollback uses the revision after publish (`revision + 2`). Reuse the stored API-key credential (`cred_e809539e2dee4967a2cd`, version 1) or create a separate reference with `POST /api/v1/model-credentials`. Revoking a credential that a live slot pins is refused (`credential_in_use`).
+
+```http
+PUT /api/v1/workflow/77/model-slots/stt/draft
+{ "expected_revision": <revision>,
+  "config": { "provider": "google_vertex", "model": "gemini-3.5-transcribe-live-preview",
+              "language": "en-US", "project_id": "project-943ab014-8a47-48e4-a92", "location": "global" },
+  "credential": { "credential_ref": "cred_e809539e2dee4967a2cd", "version": 1 },
+  "change_note": "Gemini transcription, API key + complete resource" }
+
+PUT /api/v1/workflow/77/model-slots/tts/draft
+{ "expected_revision": <revision>,
+  "config": { "provider": "google_vertex", "model": "gemini-2.5-flash-tts",
+              "voice": "Kore", "language": "en-US", "prompt": null,
+              "project_id": "project-943ab014-8a47-48e4-a92", "location": "global" },
+  "credential": { "credential_ref": "cred_e809539e2dee4967a2cd", "version": 1 },
+  "change_note": "Gemini TTS, API key + complete resource" }
+
+POST /api/v1/workflow/77/model-slots/{stt|tts}/draft/{version}/validate     -> {"status":"valid"}
+POST /api/v1/workflow/77/model-slots/{stt|tts}/publish   { "version": <draft version>, "expected_revision": <revision + 1> }
+```
+
+TTS voice fields: `voice` (a Gemini prebuilt voice name; default `Kore`; for example `Kore`, `Puck`, `Charon`, `Aoede`, `Fenrir`, `Leda`, `Zephyr`), `language` (BCP-47, default `en-US`), and optional `prompt` (a natural-language style instruction, sent in front of the text as `"{prompt}: {text}"` on the key route). `speed` and `volume` do not exist for Gemini-TTS. Omit `language` on STT to let the model detect it.
+
+Validation does not call Google. Run `scripts/probe_gemini_speech.py` (set `VERTEX_PROJECT_ID` and `VERTEX_FULL_RESOURCE=1`) to prove the route before publishing.
+
+## Embeddings and the knowledge base
+
+The knowledge base is per organization with one fixed 1536-dimension vector index; chunks record only the model id. Until per-index configuration exists:
+
+- An `embeddings` slot may only use the model already present in the organization's indexed chunks (any model if none are indexed). Otherwise validate/publish/rollback returns `409 embedding_index_incompatible`.
+- Ingestion of a document with a different model fails with a clear error instead of mixing spaces.
+- Retrieval that returns zero rows because the query model differs from the index now raises an error instead of an empty result. `POST /knowledge-base/search` returns `409`.
+- Ingestion still uses the organization-level embeddings configuration, not a workflow slot.
