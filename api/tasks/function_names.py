@@ -6,3 +6,4 @@ class FunctionNames:
     PROCESS_KNOWLEDGE_BASE_DOCUMENT = "process_knowledge_base_document"
     DELIVER_WEBHOOK = "deliver_webhook"
     COMPLETE_INACTIVE_TEXT_CHAT_SESSION = "complete_inactive_text_chat_session"
+    GENERATE_GEMINI_TTS_SAMPLE = "generate_gemini_tts_sample"

@@ -138,6 +138,7 @@ async def test_authorize_workflow_run_uses_workflow_org_for_hosted_v2(
     get_config.assert_awaited_once_with(
         organization_id=42,
         workflow_configurations={"model_overrides": {}},
+        workflow_id=7,
     )
     authorize.assert_awaited_once_with(
         organization_id=42,
@@ -817,6 +818,7 @@ async def test_authorize_workflow_run_resolves_config_from_pinned_definition(
     get_config.assert_awaited_once_with(
         organization_id=42,
         workflow_configurations=pinned_configs,
+        workflow_id=7,
     )
 
 
@@ -855,6 +857,7 @@ async def test_authorize_workflow_run_falls_back_to_workflow_configs_without_def
     get_config.assert_awaited_once_with(
         organization_id=42,
         workflow_configurations={"model_overrides": {}},
+        workflow_id=7,
     )
 
 

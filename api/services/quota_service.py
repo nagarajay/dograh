@@ -784,6 +784,7 @@ async def authorize_workflow_run_start(
         user_config = await get_effective_ai_model_configuration_for_workflow(
             organization_id=organization_id,
             workflow_configurations=workflow_configurations,
+            workflow_id=workflow.id,
         )
 
         if DEPLOYMENT_MODE != "oss":

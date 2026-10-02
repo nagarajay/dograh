@@ -77,6 +77,7 @@ from api.services.configuration.registry import (
     ServiceProviders,
     ServiceType,
 )
+from api.services.configuration.safe_errors import safe_exception_detail
 from api.services.mps_billing import ensure_hosted_mps_billing_account_v2
 from api.services.mps_service_key_client import mps_service_key_client
 from api.services.organization_context import (
@@ -473,7 +474,9 @@ async def save_model_configuration_v2(
             created_by=user.provider_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=exc.args[0])
+        raise HTTPException(
+            status_code=422, detail=safe_exception_detail(exc)
+        ) from None
 
     await upsert_organization_ai_model_configuration_v2(
         organization_id,
@@ -528,7 +531,7 @@ async def migrate_model_configuration_v2(
             created_by=user.provider_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=exc.args[0])
+        raise HTTPException(status_code=422, detail=safe_exception_detail(exc))
 
     if DEPLOYMENT_MODE != "oss":
         try:

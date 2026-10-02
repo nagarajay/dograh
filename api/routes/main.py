@@ -29,6 +29,8 @@ from api.routes.user import router as user_router
 from api.routes.webrtc_signaling import router as webrtc_signaling_router
 from api.routes.workflow import router as workflow_router
 from api.routes.workflow_embed import router as workflow_embed_router
+from api.routes.workflow_model_slots import router as workflow_model_slots_router
+from api.routes.gemini_tts_samples import router as gemini_tts_samples_router
 from api.routes.workflow_recording import router as workflow_recording_router
 from api.routes.workflow_text_chat import router as workflow_text_chat_router
 from api.services.integrations import all_routers
@@ -41,6 +43,8 @@ router = APIRouter(
 router.include_router(telephony_router)
 router.include_router(superuser_router)
 router.include_router(workflow_router)
+router.include_router(workflow_model_slots_router)
+router.include_router(gemini_tts_samples_router)
 router.include_router(workflow_text_chat_router)
 router.include_router(user_router)
 router.include_router(campaign_router)

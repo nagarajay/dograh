@@ -33,6 +33,7 @@ from api.services.configuration.masking import (
 )
 from api.services.configuration.registry import ServiceProviders
 from api.services.configuration.resolve import resolve_effective_config
+from api.services.configuration.safe_errors import validation_error_text
 
 AIModelConfigurationSource = Literal["organization_v2", "legacy_user_v1", "empty"]
 WORKFLOW_MODEL_CONFIGURATION_V2_OVERRIDE_KEY = "model_configuration_v2_override"
@@ -83,6 +84,38 @@ async def get_resolved_ai_model_configuration(
 
 
 async def get_effective_ai_model_configuration_for_workflow(
+    *,
+    organization_id: int | None,
+    workflow_configurations: dict | None,
+    workflow_id: int | None = None,
+) -> EffectiveAIModelConfiguration:
+    """Effective model configuration for a workflow run.
+
+    Base: the workflow's v2 override, else organization configuration plus any
+    legacy ``model_overrides``. Then, when ``workflow_id`` is given, each slot the
+    workflow has *published* per-slot settings for replaces the base value. A
+    workflow without published slots is unaffected.
+    """
+    effective = await _base_effective_configuration(
+        organization_id=organization_id,
+        workflow_configurations=workflow_configurations,
+    )
+    if workflow_id is None or organization_id is None:
+        return effective
+
+    from api.services.configuration.slot_settings import load_published_overlay
+
+    overlay = await load_published_overlay(
+        repo=db_client, workflow_id=workflow_id, organization_id=organization_id
+    )
+    if not overlay:
+        return effective
+    return effective.model_copy(
+        update={slot: resolved.service for slot, resolved in overlay.items()}
+    )
+
+
+async def _base_effective_configuration(
     *,
     organization_id: int | None,
     workflow_configurations: dict | None,
@@ -141,9 +174,11 @@ def _parse_organization_ai_model_configuration_v2(
     try:
         return OrganizationAIModelConfigurationV2.model_validate(row.value)
     except ValidationError as exc:
+        # str(exc) would embed the offending input (API keys, service-account JSON).
         logger.warning(
             "Invalid org AI model configuration v2 for organization "
-            f"{organization_id}: {exc}. Falling back to legacy configuration."
+            f"{organization_id}: {validation_error_text(exc)}. "
+            "Falling back to legacy configuration."
         )
         return None
 

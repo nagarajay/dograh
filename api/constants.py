@@ -96,7 +96,13 @@ DOGRAH_DEVOPS_SECRET = os.getenv("DOGRAH_DEVOPS_SECRET") or None
 # super-admin auth is interactive. Unset means the provisioning endpoints are
 # unavailable, which is the safe direction for a deployment that never
 # provisions from outside.
-PLATFORM_ADMIN_API_KEY = os.getenv("PLATFORM_ADMIN_API_KEY") or None
+# ``PLATFORM_ADMIN_API_KEY`` is canonical. Keep the historical DOGRAH-prefixed
+# name as a compatibility alias for existing server-side integrations.
+PLATFORM_ADMIN_API_KEY = (
+    os.getenv("PLATFORM_ADMIN_API_KEY")
+    or os.getenv("DOGRAH_PLATFORM_ADMIN_API_KEY")
+    or None
+)
 
 # A short shared secret is brute-forceable over HTTP, and this one mints
 # organizations. A configured key below this length is treated as no key at all.
@@ -108,6 +114,16 @@ PLATFORM_ADMIN_API_KEY_MIN_LENGTH = 32
 # Mirrored by the partial unique index uq_api_keys_active_platform_provisioning
 # and by migration b4d9e2f70a15 -- change all three together or not at all.
 PLATFORM_PROVISIONING_API_KEY_NAME = "platform-provisioning"
+
+# Platform-owned credential for the offline Gemini-TTS sample library. These
+# values are intentionally separate from tenant/workflow provider credentials;
+# the API never accepts them in a sample-pack request body.
+GEMINI_TTS_SAMPLE_API_KEY = os.getenv("GEMINI_TTS_SAMPLE_API_KEY") or None
+GEMINI_TTS_SAMPLE_PROJECT_ID = os.getenv("GEMINI_TTS_SAMPLE_PROJECT_ID") or None
+GEMINI_TTS_SAMPLE_CREDENTIAL_REF = (
+    os.getenv("GEMINI_TTS_SAMPLE_CREDENTIAL_REF") or None
+)
+GEMINI_TTS_SAMPLE_LOCATION = os.getenv("GEMINI_TTS_SAMPLE_LOCATION", "global")
 
 # Storage Configuration
 ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
@@ -311,3 +327,13 @@ OSS_JWT_SECRET = os.getenv("OSS_JWT_SECRET", "change-me-in-production")
 OSS_JWT_EXPIRY_HOURS = int(os.getenv("OSS_JWT_EXPIRY_HOURS", "720"))  # 30 days
 
 TUNER_BASE_URL = os.getenv("TUNER_BASE_URL", "https://api.usetuner.ai")
+
+
+def slot_template_on_create_enabled() -> bool:
+    """Whether new workflows must copy the organization default into their own slots.
+
+    Read at call time. When enabled, a workflow whose copy has not completed is
+    marked ``pending`` and refuses to run; it never falls back to inherited
+    organization defaults.
+    """
+    return os.getenv("WORKFLOW_SLOT_TEMPLATE_ON_CREATE", "false").lower() == "true"

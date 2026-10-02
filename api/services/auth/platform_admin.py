@@ -57,6 +57,7 @@ def _configured_key() -> str | None:
 
 
 async def require_platform_admin(
+    authorization: Annotated[str | None, Header()] = None,
     x_platform_admin_key: Annotated[
         str | None, Header(alias=PLATFORM_ADMIN_HEADER)
     ] = None,
@@ -79,6 +80,14 @@ async def require_platform_admin(
                 "platform provisioning endpoints."
             ),
         )
+
+    # Browser super-admins use their normal interactive session. The shared
+    # platform key remains available for AVSIQ/server-to-server callers.
+    if authorization:
+        from api.services.auth.depends import get_superuser
+
+        await get_superuser(authorization, None)
+        return
 
     configured = _configured_key()
     if configured is None:

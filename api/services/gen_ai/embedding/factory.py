@@ -15,6 +15,7 @@ from api.db.db_client import DBClient
 from .azure_openai_service import AzureOpenAIEmbeddingService
 from .base import BaseEmbeddingService
 from .dograh_service import DograhEmbeddingService
+from .google_vertex_service import GoogleVertexEmbeddingService
 from .openai_service import OpenAIEmbeddingService
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -64,6 +65,7 @@ async def build_embedding_service(
     api_version: Optional[str] = None,
     correlation_id: Optional[str] = None,
     resolve_correlation: bool = False,
+    organization_id: Optional[int] = None,
 ) -> BaseEmbeddingService:
     """Construct the right embedding service for a provider/config.
 
@@ -85,6 +87,31 @@ async def build_embedding_service(
             endpoint=endpoint,
             model_id=model_id,
             api_version=api_version or DEFAULT_AZURE_API_VERSION,
+        )
+
+    if provider == ServiceProviders.GOOGLE_VERTEX.value:
+        # Project, location and service-account JSON are not part of the
+        # shared (provider, api_key, model) signature, so read them from the
+        # organization's own embeddings configuration.
+        if organization_id is None:
+            raise ValueError("organization_id is required for Google Vertex embeddings")
+        from api.services.configuration.ai_model_configuration import (
+            get_resolved_ai_model_configuration,
+        )
+
+        resolved = await get_resolved_ai_model_configuration(
+            organization_id=organization_id
+        )
+        config = resolved.effective.embeddings
+        if config is None or config.provider != ServiceProviders.GOOGLE_VERTEX.value:
+            raise ValueError("Google Vertex embeddings are not configured")
+        return GoogleVertexEmbeddingService(
+            db_client=db_client,
+            model_id=model_id,
+            project_id=config.project_id,
+            location=config.location,
+            credentials=config.credentials,
+            api_key=api_key,
         )
 
     if provider == ServiceProviders.DOGRAH.value:

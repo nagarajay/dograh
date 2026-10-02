@@ -105,6 +105,17 @@ services:
       # X-Platform-Admin-Key header. Empty means they return 503, so disabling
       # signup above does not also make tenants uncreatable.
       PLATFORM_ADMIN_API_KEY: "${PLATFORM_ADMIN_API_KEY:-}"
+      # Compatibility name for existing server-side platform integrations.
+      DOGRAH_PLATFORM_ADMIN_API_KEY: "${DOGRAH_PLATFORM_ADMIN_API_KEY:-}"
+
+      # Platform-owned Gemini-TTS sample generation. These are injected into
+      # the shared API/ARQ process environment; they are never request-body
+      # credentials and never go to browser clients.
+      GEMINI_TTS_SAMPLE_API_KEY: "${GEMINI_TTS_SAMPLE_API_KEY:-}"
+      GEMINI_TTS_SAMPLE_PROJECT_ID: "${GEMINI_TTS_SAMPLE_PROJECT_ID:-}"
+      GEMINI_TTS_SAMPLE_LOCATION: "${GEMINI_TTS_SAMPLE_LOCATION:-global}"
+      GEMINI_TTS_SAMPLE_CONCURRENCY: "${GEMINI_TTS_SAMPLE_CONCURRENCY:-1}"
+      GEMINI_TTS_SAMPLE_CREDENTIAL_REF: "${GEMINI_TTS_SAMPLE_CREDENTIAL_REF:-}"
 
       # Public origin for this deployment. The API derives BACKEND_API_ENDPOINT,
       # MINIO_PUBLIC_ENDPOINT and TURN_HOST from PUBLIC_BASE_URL / PUBLIC_HOST when
@@ -138,6 +149,17 @@ services:
       # here means the reset aborts, which is the safe direction.
       DOGRAH_ENV: "${DOGRAH_ENV:-}"
       DOGRAH_SUPABASE_PROJECT_REF: "${DOGRAH_SUPABASE_PROJECT_REF:-}"
+
+      # Comma-separated Fernet keys that encrypt per-workflow provider
+      # credentials at rest (first key encrypts, all keys decrypt). Unset means
+      # the credential store fails closed. Generate with
+      # `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+      # and keep it in .env; losing it makes stored credentials unreadable.
+      PROVIDER_CREDENTIAL_ENCRYPTION_KEYS: "${PROVIDER_CREDENTIAL_ENCRYPTION_KEYS:-}"
+
+      # When true, new workflows copy the organization model configuration into
+      # their own slots and stay unrunnable until that copy succeeds.
+      WORKFLOW_SLOT_TEMPLATE_ON_CREATE: "${WORKFLOW_SLOT_TEMPLATE_ON_CREATE:-false}"
 
       # Redis configuration (using containerized redis)
       REDIS_URL: "redis://:${REDIS_PASSWORD:-redissecret}@redis:6379"

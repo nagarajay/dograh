@@ -62,6 +62,7 @@ async def create_qa_llm_service(
     user_configuration = await get_effective_ai_model_configuration_for_workflow(
         organization_id=workflow_run.workflow.organization_id,
         workflow_configurations=workflow_configurations,
+        workflow_id=workflow_run.workflow.id,
     )
     if user_configuration.llm is None:
         return None

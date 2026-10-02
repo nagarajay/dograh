@@ -1,9 +1,13 @@
+import json
+import time
 from functools import wraps
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import aiohttp
 from fastapi import HTTPException
+from google.genai import Client as GenaiClient
+from google.genai import types as genai_types
 from loguru import logger
 
 from api.constants import MPS_API_URL
@@ -19,11 +23,13 @@ from api.services.configuration.options import (
     GOOGLE_VERTEX_DEFAULT_LOCATION,
 )
 from api.services.configuration.registry import ServiceProviders
+from api.services.configuration.safe_errors import redact_text
 from api.services.pipecat.gemini_json_schema_adapter import (
     DograhGeminiJSONSchemaAdapter,
 )
 from api.services.pipecat.minimax_tts import MiniMaxOwnedSessionTTSService
 from api.utils.url_security import validate_user_configured_service_url
+from pipecat.frames.frames import ErrorFrame, TTSAudioRawFrame
 from pipecat.services.assemblyai.stt import AssemblyAISTTService, AssemblyAISTTSettings
 from pipecat.services.aws.llm import AWSBedrockLLMService, AWSBedrockLLMSettings
 from pipecat.services.azure.llm import AzureLLMService, AzureLLMSettings
@@ -53,9 +59,15 @@ from pipecat.services.elevenlabs.stt import (
 )
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService, ElevenLabsTTSSettings
 from pipecat.services.gladia.stt import GladiaSTTService, GladiaSTTSettings
+from pipecat.services.google.gemini_live.stt import GeminiSTTService, GeminiSTTSettings
 from pipecat.services.google.llm import GoogleLLMService, GoogleLLMSettings
 from pipecat.services.google.stt import GoogleSTTService, GoogleSTTSettings
-from pipecat.services.google.tts import GoogleTTSService, GoogleTTSSettings
+from pipecat.services.google.tts import (
+    GeminiTTSService,
+    GeminiTTSSettings,
+    GoogleTTSService,
+    GoogleTTSSettings,
+)
 from pipecat.services.google.vertex.llm import (
     GoogleVertexLLMService,
     GoogleVertexLLMSettings,
@@ -97,10 +109,85 @@ from pipecat.services.speechmatics.stt import (
 from pipecat.services.xai.tts import XAITTSService, XAIWebsocketTTSSettings
 from pipecat.transcriptions.language import Language
 from pipecat.utils.text.xml_function_tag_filter import XMLFunctionTagFilter
+from pipecat.utils.types import assert_given, is_given
 
 if TYPE_CHECKING:
     from api.schemas.ai_model_configuration import EffectiveAIModelConfiguration
     from api.services.pipecat.audio_config import AudioConfig
+
+
+_GOOGLE_PROVIDERS = {
+    ServiceProviders.GOOGLE.value,
+    ServiceProviders.GOOGLE_VERTEX.value,
+}
+
+
+def _google_secret_values(config) -> list[str]:
+    """Every string that must never reach a log line or an ErrorFrame."""
+    values: list[str] = []
+    for field in ("api_key", "credentials"):
+        raw = getattr(config, field, None)
+        for item in raw if isinstance(raw, list) else [raw]:
+            if not isinstance(item, str) or not item:
+                continue
+            values.append(item)
+            try:
+                info = json.loads(item)
+            except ValueError:
+                continue
+            if isinstance(info, dict):
+                values.extend(
+                    str(info[k])
+                    for k in ("private_key", "private_key_id")
+                    if info.get(k)
+                )
+                # Errors quote fragments, and JSON escapes the newlines, so the
+                # whole value alone would miss a partial or re-encoded key.
+                key = str(info.get("private_key") or "")
+                values.append(json.dumps(key)[1:-1])
+                values.extend(
+                    line.strip()
+                    for line in key.splitlines()
+                    if len(line.strip()) >= 16 and not line.startswith("-----")
+                )
+    return values
+
+
+def _install_error_redaction(service, secrets: list[str]) -> None:
+    """Strip credential material from errors a Google service reports.
+
+    Google SDK exceptions and the adapters' own ``f"...{e}"`` messages are
+    forwarded to the pipeline as ErrorFrames and end up in run logs, so the
+    redaction happens on the service rather than at each call site.
+    """
+    if not secrets:
+        return
+    push_error = service.push_error
+    push_frame = service.push_frame
+
+    def scrub(exc):
+        if exc is not None and redact_text(str(exc), secrets) != str(exc):
+            exc.args = (redact_text(str(exc), secrets),)
+            if hasattr(exc, "message"):
+                try:
+                    exc.message = redact_text(str(exc.message), secrets)
+                except AttributeError:
+                    pass
+
+    async def safe_push_error(error_msg, exception=None, *args, **kwargs):
+        scrub(exception)
+        return await push_error(
+            redact_text(error_msg, secrets), exception, *args, **kwargs
+        )
+
+    async def safe_push_frame(frame, *args, **kwargs):
+        if isinstance(frame, ErrorFrame):
+            frame.error = redact_text(frame.error, secrets)
+            scrub(frame.exception)
+        return await push_frame(frame, *args, **kwargs)
+
+    service.push_error = safe_push_error
+    service.push_frame = safe_push_frame
 
 
 def _report_service_factory_failures(
@@ -142,6 +229,8 @@ def _report_service_factory_failures(
                 )
                 raise
 
+            if config_section and str(provider_value).lower() in _GOOGLE_PROVIDERS:
+                _install_error_redaction(service, _google_secret_values(config))
             return annotate_failure_metadata(
                 service,
                 source=source,
@@ -241,7 +330,275 @@ class DograhGoogleLLMService(GoogleLLMService):
 
 
 class DograhGoogleVertexLLMService(GoogleVertexLLMService):
+    """Vertex LLM that also accepts a Vertex API key (express mode).
+
+    With an API key the SDK talks to the express-mode endpoint, which has no
+    project or location, so neither is passed. Service-account / ADC behaviour
+    is unchanged.
+    """
+
     adapter_class = DograhGeminiJSONSchemaAdapter
+
+    def __init__(self, *, vertex_api_key: str | None = None, **kwargs):
+        # Read by _get_credentials/create_client, which the parent constructor
+        # calls, so it has to be set first.
+        self._vertex_api_key = vertex_api_key
+        super().__init__(**kwargs)
+
+    def _get_credentials(self, credentials, credentials_path):  # type: ignore[override]
+        if self._vertex_api_key:
+            return None
+        return super()._get_credentials(credentials, credentials_path)
+
+    def create_client(self):
+        if not self._vertex_api_key:
+            return super().create_client()
+        self._client = GenaiClient(
+            vertexai=True,
+            api_key=self._vertex_api_key,
+            http_options=self._http_options,
+        )
+
+
+def _vertex_client(
+    *,
+    api_key: str | None,
+    credentials: str | None,
+    project_id: str | None,
+    location: str,
+    http_options=None,
+):
+    """Build the google-genai Vertex client for the chosen authentication."""
+    if api_key:
+        return GenaiClient(vertexai=True, api_key=api_key, http_options=http_options)
+    return GenaiClient(
+        vertexai=True,
+        credentials=GoogleVertexLLMService._get_credentials(credentials, None),
+        project=project_id,
+        location=location,
+        http_options=http_options,
+    )
+
+
+def _vertex_model_resource(model: str, project_id: str | None, location: str) -> str:
+    """Complete ``projects/{p}/locations/{l}/publishers/google/models/{m}`` name.
+
+    The SDK builds only ``publishers/google/models/{m}`` for an API-key client,
+    which the Live API rejects (websocket 1007) and which makes the Vertex API
+    resolve the location from the key's account. Passing the full resource
+    works with a key (live probes, 2026-10-01) and keeps the location explicit.
+    """
+    if not project_id or model.startswith("projects/"):
+        return model
+    return (
+        f"projects/{project_id}/locations/{location}/publishers/google/models/{model}"
+    )
+
+
+class DograhGeminiVertexApiTTSService(GeminiTTSService):
+    """Gemini-TTS over the Vertex API (``streamGenerateContent``) with an API key.
+
+    The Cloud Text-to-Speech API takes OAuth credentials only, so a key has to
+    use the Vertex API path instead. The parent's GenAI branch would build an
+    AI Studio client; this subclass always builds a Vertex one and never reads
+    ``GOOGLE_API_KEY``.
+    """
+
+    def __init__(
+        self,
+        *,
+        vertex_api_key: str,
+        project_id: str | None = None,
+        location: str = "global",
+        **kwargs,
+    ):
+        self._vertex_api_key = vertex_api_key
+        self._vertex_project_id = project_id
+        self._vertex_location = location
+        # Vertex Gemini TTS returns signed 16-bit mono PCM at 24 kHz. Keep the
+        # native rate on the frames so BaseOutputTransport resamples it to the
+        # configured WebRTC rate instead of treating 24 kHz bytes as 16 kHz.
+        kwargs.setdefault("sample_rate", self.GOOGLE_SAMPLE_RATE)
+        super().__init__(use_genai=True, api_key=vertex_api_key, **kwargs)
+
+    def _create_client(self, credentials, credentials_path):
+        options = self._http_options
+        if self._vertex_project_id:
+            # Google's REST reference for the complete resource uses /v1/.
+            options = (options or genai_types.HttpOptions()).model_copy(
+                update={"api_version": "v1"}
+            )
+        return _vertex_client(
+            api_key=self._vertex_api_key,
+            credentials=None,
+            project_id=None,
+            location=None,
+            http_options=options,
+        )
+
+    def _warn_unsupported_genai_settings(self, *, multi_speaker, prompt) -> None:
+        # The Vertex API takes the style prompt in the request text.
+        if multi_speaker:
+            logger.warning(
+                f"{self}: multi-speaker is not supported here; using one speaker."
+            )
+
+    async def _run_genai_tts(self, text: str, context_id: str):
+        prompt = assert_given(self._settings.prompt)
+        contents = f"{prompt}: {text}" if prompt else text
+        # Sample-library generation invokes this method directly, before the
+        # normal TTS setup frame initializes ``self.sample_rate``. Gemini-TTS
+        # always returns native 24 kHz mono PCM, so use that rate for direct
+        # calls as well as normal pipeline calls.
+        output_sample_rate = self.sample_rate or self.GOOGLE_SAMPLE_RATE
+        # Direct sample generation has no pipeline setup; self.chunk_size is
+        # then zero. Always consume bytes using the resolved native rate.
+        chunk_size = int(output_sample_rate * 0.5 * 2)
+        stream = None
+        trace = getattr(self, "_sample_trace", lambda *args, **kwargs: None)
+        try:
+            config = genai_types.GenerateContentConfig(
+                # Gemini-TTS rejects requests that do not explicitly ask for
+                # audio, even though speech_config is present.
+                response_modalities=["AUDIO"],
+                speech_config=genai_types.SpeechConfig(
+                    language_code=assert_given(self._settings.language),
+                    voice_config=genai_types.VoiceConfig(
+                        prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
+                            voice_name=assert_given(self._settings.voice)
+                        )
+                    ),
+                ),
+            )
+            await self.start_tts_usage_metrics(text)
+            trace("request_dispatched")
+            stream = await self._client.aio.models.generate_content_stream(
+                model=_vertex_model_resource(
+                    assert_given(self._settings.model),
+                    self._vertex_project_id,
+                    self._vertex_location,
+                ),
+                contents=contents,
+                config=config,
+            )
+            buffer, first = b"", False
+            async for chunk in stream:
+                trace("response_chunk")
+                feedback = getattr(chunk, "prompt_feedback", None)
+                if feedback and feedback.block_reason:
+                    raise RuntimeError(f"Google safety block: {feedback.block_reason.name}")
+                for candidate in (chunk.candidates or [])[:1]:
+                    finish = getattr(candidate, "finish_reason", None)
+                    if finish and finish.name not in {"STOP", "FINISH_REASON_UNSPECIFIED"}:
+                        raise RuntimeError(f"Google finish reason: {finish.name}")
+                    for part in (
+                        candidate.content.parts if candidate.content else None
+                    ) or []:
+                        data = part.inline_data.data if part.inline_data else None
+                        if not data:
+                            continue
+                        if not first:
+                            trace("first_audio", audio_bytes=len(data), mime_type=getattr(part.inline_data, "mime_type", None))
+                            await self.stop_ttfb_metrics()
+                            first = True
+                        buffer += data
+                        while len(buffer) >= chunk_size:
+                            piece, buffer = (
+                                buffer[:chunk_size],
+                                buffer[chunk_size:],
+                            )
+                            yield TTSAudioRawFrame(
+                                piece, output_sample_rate, 1, context_id=context_id
+                            )
+            if buffer:
+                yield TTSAudioRawFrame(
+                    buffer, output_sample_rate, 1, context_id=context_id
+                )
+            trace("stream_completed")
+            if not first:
+                raise RuntimeError("Google completed without audio")
+        except Exception as e:
+            detail = str(e)
+            for private_value in (self._vertex_api_key, contents, text, prompt):
+                if private_value:
+                    detail = detail.replace(private_value, "[REDACTED]")
+            yield ErrorFrame(error=f"Gemini Vertex TTS generation error: {detail}", exception=e)
+        finally:
+            # The google-genai stream owns an HTTP response body. Explicitly
+            # close it when the provider stalls or the ARQ job is cancelled so
+            # the next generation does not inherit a leaked connection.
+            close_stream = getattr(stream, "aclose", None)
+            if close_stream is not None:
+                try:
+                    await close_stream()
+                except Exception:
+                    logger.debug("Gemini Vertex TTS stream close failed", exc_info=True)
+
+
+class DograhGeminiVertexSTTService(GeminiSTTService):
+    """Gemini Live transcription on Vertex, with service-account/ADC auth."""
+
+    def __init__(
+        self,
+        *,
+        project_id: str | None,
+        location: str,
+        credentials: str | None,
+        api_key: str | None = None,
+        **kwargs,
+    ):
+        self._vertex_project_id = project_id
+        self._vertex_location = location
+        self._vertex_credentials = credentials
+        self._vertex_api_key = api_key
+        # The parent requires an api_key argument that this subclass never uses.
+        super().__init__(api_key="unused-vertex", **kwargs)
+
+    def _create_client(self):
+        self._client = _vertex_client(
+            api_key=self._vertex_api_key,
+            credentials=self._vertex_credentials,
+            project_id=self._vertex_project_id,
+            location=self._vertex_location,
+            http_options=self._http_options,
+        )
+
+    async def _open_session(self):
+        """Open the Live session; with an API key, name the model completely."""
+        if not (self._vertex_api_key and self._vertex_project_id):
+            return await super()._open_session()
+        model = _vertex_model_resource(
+            assert_given(self._settings.model),
+            self._vertex_project_id,
+            self._vertex_location,
+        )
+        self._session_ctx = self._client.aio.live.connect(
+            model=model, config=self._build_live_config()
+        )
+        self._session = await self._session_ctx.__aenter__()
+        self._connection_start_time = time.time()
+        await self._call_event_handler("on_connected")
+        return self._session
+
+    def _build_live_config(self):
+        """Live config in the form Gemini 3.5 Transcribe documents.
+
+        The parent sends ``language_hints`` / ``language_auto`` /
+        ``adaptation_phrases``, which the SDK now marks deprecated in favour of
+        top-level ``language_codes`` / ``custom_vocabulary``. Omitting
+        ``language_codes`` already means automatic detection.
+        """
+        kwargs: dict = {}
+        codes = self._get_language_codes()
+        if codes:
+            kwargs["language_codes"] = codes
+        phrases = self._settings.adaptation_phrases
+        if is_given(phrases) and phrases:
+            kwargs["custom_vocabulary"] = list(phrases)
+        return genai_types.LiveConnectConfig(
+            response_modalities=[genai_types.Modality.TEXT],
+            input_audio_transcription=genai_types.AudioTranscriptionConfig(**kwargs),
+        )
 
 
 def _validate_runtime_service_url(url: str, field_name: str) -> None:
@@ -414,6 +771,28 @@ def create_stt_service(
             credentials=credentials,
             location=location,
             settings=GoogleSTTSettings(**settings_kwargs),
+            sample_rate=audio_config.transport_in_sample_rate,
+        )
+    elif user_config.stt.provider == ServiceProviders.GOOGLE_VERTEX.value:
+        stt = user_config.stt
+        language = (getattr(stt, "language", None) or "").strip()
+        settings_kwargs = {"model": stt.model}
+        if language:
+            try:
+                settings_kwargs["languages"] = [Language(language)]
+            except ValueError:
+                settings_kwargs["language"] = language
+        api_key = stt.api_key if isinstance(stt.api_key, str) else None
+        logger.info(
+            f"Vertex STT: model={stt.model}, location={stt.location}, "
+            f"auth={'api_key' if api_key else 'service_account' if stt.credentials else 'adc'}"
+        )
+        return DograhGeminiVertexSTTService(
+            project_id=stt.project_id,
+            location=_google_vertex_location(stt.location, "STT"),
+            credentials=stt.credentials,
+            api_key=api_key,
+            settings=GeminiSTTSettings(**settings_kwargs),
             sample_rate=audio_config.transport_in_sample_rate,
         )
     elif user_config.stt.provider == ServiceProviders.CARTESIA.value:
@@ -691,7 +1070,11 @@ def create_tts_service(
         language = getattr(user_config.tts, "language", None) or "en-US"
         voice = getattr(user_config.tts, "voice", None) or "en-US-Chirp3-HD-Charon"
         speed = getattr(user_config.tts, "speed", None)
+        # The default Text-to-Speech endpoint is the global one; only regional
+        # and multi-region locations ("us", "eu", ...) are prefixed onto the host.
         location = getattr(user_config.tts, "location", None) or None
+        if location and location.strip().lower() == "global":
+            location = None
         credentials = getattr(user_config.tts, "credentials", None)
 
         settings_kwargs = {
@@ -706,6 +1089,50 @@ def create_tts_service(
             credentials=credentials,
             location=location,
             settings=GoogleTTSSettings(**settings_kwargs),
+            text_filters=[xml_function_tag_filter],
+            skip_aggregator_types=["recording_router", "recording"],
+            silence_time_s=1.0,
+        )
+    elif user_config.tts.provider == ServiceProviders.GOOGLE_VERTEX.value:
+        tts = user_config.tts
+        # Gemini-TTS runs on Cloud Text-to-Speech: "global" is the unprefixed host.
+        location = (tts.location or "").strip()
+        if not location or location.lower() == "global":
+            location = None
+        logger.info(
+            f"Vertex TTS: model={tts.model}, voice={tts.voice}, "
+            f"location={location or 'global'}, "
+            f"auth={'service_account' if tts.credentials else 'adc'}"
+        )
+        if isinstance(tts.api_key, str) and tts.api_key:
+            logger.info(
+                f"Vertex TTS: model={tts.model}, voice={tts.voice}, "
+                "api=vertex_stream_generate_content, auth=api_key"
+            )
+            return DograhGeminiVertexApiTTSService(
+                vertex_api_key=tts.api_key,
+                project_id=getattr(tts, "project_id", None),
+                location=(tts.location or "global").strip() or "global",
+                settings=GeminiTTSSettings(
+                    model=tts.model,
+                    voice=tts.voice,
+                    language=tts.language,
+                    prompt=tts.prompt or None,
+                ),
+                text_filters=[xml_function_tag_filter],
+                skip_aggregator_types=["recording_router", "recording"],
+                silence_time_s=1.0,
+            )
+        return GeminiTTSService(
+            credentials=tts.credentials,
+            location=location,
+            use_genai=False,
+            settings=GeminiTTSSettings(
+                model=tts.model,
+                voice=tts.voice,
+                language=tts.language,
+                prompt=tts.prompt or None,
+            ),
             text_filters=[xml_function_tag_filter],
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
@@ -1187,9 +1614,11 @@ def create_llm_service_from_provider(
             ),
         )
     elif provider == ServiceProviders.GOOGLE_VERTEX.value:
+        vertex_api_key = api_key if isinstance(api_key, str) and api_key else None
         return DograhGoogleVertexLLMService(
+            vertex_api_key=vertex_api_key,
             credentials=credentials,
-            project_id=project_id,
+            project_id=project_id or "",
             location=vertex_location,
             settings=GoogleVertexLLMSettings(
                 model=model,

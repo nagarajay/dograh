@@ -12,7 +12,7 @@ from api.tasks.function_names import FunctionNames
 setup_logging()
 
 # Now import ARQ and task dependencies
-from arq import create_pool, cron
+from arq import create_pool, cron, func
 from arq.connections import ArqRedis, RedisSettings
 from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
@@ -62,6 +62,7 @@ from api.tasks.campaign_tasks import (
     sync_campaign_source,
 )
 from api.tasks.knowledge_base_processing import process_knowledge_base_document
+from api.tasks.gemini_tts_samples import generate_gemini_tts_sample
 from api.tasks.run_integrations import run_integrations_post_workflow_run
 from api.tasks.text_chat_inactivity import (
     complete_inactive_text_chat_session,
@@ -80,6 +81,9 @@ class WorkerSettings:
         process_knowledge_base_document,
         deliver_webhook,
         complete_inactive_text_chat_session,
+        # Includes waiting for the global sample slot; each provider call still
+        # has its own 120s deadline and exactly one outbound request.
+        func(generate_gemini_tts_sample, max_tries=1, timeout=4000),
     ]
     cron_jobs = [
         # Safety net for webhook deliveries whose ARQ job was lost (worker

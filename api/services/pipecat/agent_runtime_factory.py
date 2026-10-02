@@ -148,6 +148,7 @@ class AgentRuntimeFactory:
         user_config = await get_effective_ai_model_configuration_for_workflow(
             organization_id=self._organization_id,
             workflow_configurations=run_configs,
+            workflow_id=workflow.id,
         )
 
         if user_config.is_realtime and user_config.realtime is not None:

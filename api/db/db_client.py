@@ -18,8 +18,10 @@ from api.db.webhook_credential_client import WebhookCredentialClient
 from api.db.webhook_delivery_client import WebhookDeliveryClient
 from api.db.workflow_client import WorkflowClient
 from api.db.workflow_recording_client import WorkflowRecordingClient
+from api.db.gemini_tts_sample_client import GeminiTTSSampleClient
 from api.db.workflow_run_client import WorkflowRunClient
 from api.db.workflow_run_text_session_client import WorkflowRunTextSessionClient
+from api.db.workflow_slot_client import WorkflowSlotClient
 from api.db.workflow_template_client import WorkflowTemplateClient
 
 
@@ -43,10 +45,12 @@ class DBClient(
     ToolClient,
     KnowledgeBaseClient,
     WorkflowRecordingClient,
+    GeminiTTSSampleClient,
     TelephonyConfigurationClient,
     TelephonyPhoneNumberClient,
     TelephonyTrunkClient,
     FolderClient,
+    WorkflowSlotClient,
 ):
     """
     Unified database client that combines all specialized database operations.

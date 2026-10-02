@@ -6,6 +6,7 @@ from sqlalchemy import func, update
 from sqlalchemy.future import select
 from sqlalchemy.orm import load_only, selectinload
 
+from api.constants import slot_template_on_create_enabled
 from api.db.base_client import BaseDBClient
 from api.db.models import WorkflowDefinitionModel, WorkflowModel, WorkflowRunModel
 
@@ -35,6 +36,11 @@ class WorkflowClient(BaseDBClient):
                     workflow_definition=workflow_definition,  # Keep for backwards compatibility
                     user_id=user_id,
                     organization_id=organization_id,
+                    # Fail closed: until the org-default template is copied into
+                    # the workflow's slots, the workflow must not run.
+                    slot_template_status=(
+                        "pending" if slot_template_on_create_enabled() else None
+                    ),
                 )
                 session.add(new_workflow)
                 await session.flush()  # Flush to get the workflow ID

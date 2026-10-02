@@ -5,14 +5,68 @@ from pathlib import Path
 from typing import List, Optional
 
 from loguru import logger
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from api.db.base_client import BaseDBClient
 from api.db.models import KnowledgeBaseChunkModel, KnowledgeBaseDocumentModel
 
 
+class EmbeddingIndexMismatchError(Exception):
+    """Query/ingest embedding model differs from what the knowledge base holds."""
+
+    def __init__(self, requested_model: str, indexed: List[dict]):
+        self.requested_model = requested_model
+        self.indexed = indexed
+        super().__init__(
+            f"Embedding model '{requested_model}' does not match the model(s) this "
+            "knowledge base was indexed with ("
+            + ", ".join(f"'{s['model']}'" for s in indexed)
+            + "). Re-ingest the documents with the new model or switch back."
+        )
+
+
 class KnowledgeBaseClient(BaseDBClient):
+    async def get_organization_embedding_signatures(
+        self, organization_id: int, document_uuids: Optional[List[str]] = None
+    ) -> List[dict]:
+        """Distinct ``(embedding_model, embedding_dimension)`` pairs with chunk counts.
+
+        Only active documents count. The knowledge base is scoped to the
+        organization (there is no per-index configuration), so this is the set
+        of embedding configurations retrieval must match.
+        """
+        async with self.async_session() as session:
+            query = (
+                select(
+                    KnowledgeBaseChunkModel.embedding_model,
+                    KnowledgeBaseChunkModel.embedding_dimension,
+                    func.count(KnowledgeBaseChunkModel.id),
+                )
+                .join(
+                    KnowledgeBaseDocumentModel,
+                    KnowledgeBaseDocumentModel.id
+                    == KnowledgeBaseChunkModel.document_id,
+                )
+                .where(
+                    KnowledgeBaseChunkModel.organization_id == organization_id,
+                    KnowledgeBaseDocumentModel.is_active.is_(True),
+                )
+                .group_by(
+                    KnowledgeBaseChunkModel.embedding_model,
+                    KnowledgeBaseChunkModel.embedding_dimension,
+                )
+            )
+            if document_uuids:
+                query = query.where(
+                    KnowledgeBaseDocumentModel.document_uuid.in_(document_uuids)
+                )
+            result = await session.execute(query)
+            return [
+                {"model": model, "dimension": dimension, "chunks": count}
+                for model, dimension, count in result.all()
+            ]
+
     """Client for managing knowledge base documents and vector embeddings."""
 
     async def create_document(
@@ -449,8 +503,37 @@ class KnowledgeBaseClient(BaseDBClient):
                 *params,
             )
 
-            # Convert asyncpg records to dictionaries
-            return [dict(row) for row in rows]
+            results = [dict(row) for row in rows]
+
+        if not results and embedding_model:
+            # Zero rows is only trustworthy if the index was built with this model.
+            # Otherwise the filter above silently hid every chunk.
+            await self.assert_embedding_model_matches_index(
+                organization_id,
+                embedding_model,
+                document_uuids=document_uuids,
+            )
+        return results
+
+    async def assert_embedding_model_matches_index(
+        self,
+        organization_id: int,
+        embedding_model: str,
+        embedding_dimension: Optional[int] = None,
+        document_uuids: Optional[List[str]] = None,
+    ) -> None:
+        signatures = await self.get_organization_embedding_signatures(
+            organization_id, document_uuids
+        )
+        if not signatures:
+            return
+        for signature in signatures:
+            if signature["model"] == embedding_model and (
+                embedding_dimension is None
+                or signature["dimension"] == embedding_dimension
+            ):
+                return
+        raise EmbeddingIndexMismatchError(embedding_model, signatures)
 
     async def update_document_full_text(
         self,

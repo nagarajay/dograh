@@ -34,6 +34,7 @@ from api.services.configuration.defaults import DEFAULT_SERVICE_PROVIDERS
 from api.services.configuration.masking import check_for_masked_keys, mask_user_config
 from api.services.configuration.merge import merge_user_configurations
 from api.services.configuration.registry import REGISTRY, ServiceType
+from api.services.configuration.safe_errors import safe_exception_detail
 from api.services.mps_service_key_client import mps_service_key_client
 from api.services.organization_preferences import (
     get_organization_preferences,
@@ -209,7 +210,9 @@ async def update_user_configurations(
                 existing_config, incoming_dict
             )
         except ValidationError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+            raise HTTPException(
+                status_code=422, detail=safe_exception_detail(e)
+            ) from None
 
         try:
             check_for_masked_keys(user_configurations)
@@ -224,7 +227,7 @@ async def update_user_configurations(
                 created_by=user.provider_id,
             )
         except ValueError as e:
-            raise HTTPException(status_code=422, detail=e.args[0])
+            raise HTTPException(status_code=422, detail=safe_exception_detail(e))
 
         try:
             organization_configuration = convert_legacy_ai_model_configuration_to_v2(
@@ -318,7 +321,7 @@ async def validate_user_configurations(
                 )
             return status
         except ValueError as e:
-            raise HTTPException(status_code=422, detail=e.args[0])
+            raise HTTPException(status_code=422, detail=safe_exception_detail(e))
     else:
         return {"status": []}
 

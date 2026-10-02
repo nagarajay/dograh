@@ -220,6 +220,7 @@ async def get_agent_inspection(*, workflow, organization_id: int) -> AgentInspec
         await get_effective_ai_model_configuration_for_workflow(
             organization_id=organization_id,
             workflow_configurations=workflow_configurations,
+            workflow_id=workflow.id,
         )
     )
 

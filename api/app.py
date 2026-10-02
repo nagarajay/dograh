@@ -28,6 +28,7 @@ if SENTRY_DSN and (
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -111,6 +112,24 @@ async def handle_mps_unavailable_error(
         status_code=503,
         content={"detail": MPS_UNAVAILABLE_PUBLIC_MESSAGE},
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation_error(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """FastAPI's default 422 echoes each rejected value back as ``input``.
+
+    Request bodies here can carry API keys and service-account JSON, so drop the
+    echoed input and keep location, type and message.
+    """
+
+    errors = [
+        {key: value for key, value in error.items() if key not in ("input", "ctx")}
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 # Configure CORS.

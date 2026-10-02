@@ -11,6 +11,7 @@ import tempfile
 from loguru import logger
 
 from api.db import db_client
+from api.db.knowledge_base_client import EmbeddingIndexMismatchError
 from api.db.models import KnowledgeBaseChunkModel
 from api.services.gen_ai import build_embedding_service
 from api.services.mps_service_key_client import mps_service_key_client
@@ -202,7 +203,7 @@ async def process_knowledge_base_document(
             )
             return
 
-        if not embeddings_api_key:
+        if not embeddings_api_key and embeddings_provider != "google_vertex":
             error_message = (
                 "API key not configured. Please set your API key in "
                 "Model Configurations > Embedding to process documents."
@@ -224,7 +225,22 @@ async def process_knowledge_base_document(
             endpoint=embeddings_endpoint,
             api_version=embeddings_api_version,
             resolve_correlation=True,
+            organization_id=organization_id,
         )
+
+        # Ingestion must land in the same embedding space retrieval will query.
+        try:
+            await db_client.assert_embedding_model_matches_index(
+                organization_id,
+                embedding_service.get_model_id(),
+                embedding_service.get_embedding_dimension(),
+            )
+        except EmbeddingIndexMismatchError as mismatch:
+            logger.warning(f"Document {document_id}: {mismatch}")
+            await db_client.update_document_status(
+                document_id, "failed", error_message=str(mismatch)
+            )
+            return
 
         mps_chunks = mps_response.get("chunks", [])
         if not mps_chunks:

@@ -1,3 +1,4 @@
+import json
 from typing import Optional, TypedDict
 
 import httpx
@@ -11,6 +12,9 @@ from groq import Groq
 #     Neuphonic = None
 from api.schemas.ai_model_configuration import (
     EffectiveAIModelConfiguration,
+)
+from api.services.configuration.options.google_vertex_catalog import (
+    check_vertex_config,
 )
 from api.services.configuration.registry import ServiceConfig, ServiceProviders
 from api.services.mps_service_key_client import mps_service_key_client
@@ -30,6 +34,38 @@ class APIKeyStatus(TypedDict):
 
 class APIKeyStatusResponse(TypedDict):
     status: list[APIKeyStatus]
+
+
+def _validate_google_service_account_json(
+    credentials: str | None, label: str, *, require_fields: bool = True
+) -> None:
+    """Reject credentials that cannot be a service-account key.
+
+    Blank is allowed (Application Default Credentials). Messages never echo the
+    value, so a pasted private key is not leaked through the error.
+    """
+    if not credentials:
+        return
+    try:
+        info = json.loads(credentials)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{label} credentials must be the full service-account JSON. An API key "
+            f"is not supported on this path."
+        ) from None
+    if not isinstance(info, dict) or info.get("type") != "service_account":
+        raise ValueError(f"{label} credentials must be a service-account JSON key")
+    if not require_fields:
+        return
+    missing = [
+        field
+        for field in ("project_id", "private_key", "client_email")
+        if not info.get(field)
+    ]
+    if missing:
+        raise ValueError(
+            f"{label} service-account JSON is missing: {', '.join(missing)}"
+        )
 
 
 class UserConfigurationValidator:
@@ -109,6 +145,26 @@ class UserConfigurationValidator:
 
         return {"status": [{"model": "all", "message": "ok"}]}
 
+    async def validate_single(
+        self,
+        service_config: ServiceConfig,
+        service_name: str,
+        organization_id: Optional[int] = None,
+        created_by: Optional[str] = None,
+    ) -> list[str]:
+        """Validate one slot; returns error messages (empty when valid)."""
+        self._dograh_service_key_validation_cache.clear()
+        self._auth_context = {
+            "organization_id": organization_id,
+            "created_by": created_by,
+        }
+        return [
+            status["message"]
+            for status in self._validate_service(
+                service_config, service_name, required=True
+            )
+        ]
+
     def _validate_service(
         self,
         service_config: Optional[ServiceConfig],
@@ -164,16 +220,24 @@ class UserConfigurationValidator:
                 return [{"model": service_name, "message": str(e)}]
             return []
 
-        # Vertex LLM uses service-account credentials (or ADC) instead of api_key
+        # Google Cloud Speech-to-Text / Text-to-Speech authenticate with a
+        # service account (or ADC), never an API key. The LLM under the same
+        # "google" provider is the Gemini Developer API and does use api_key.
+        if provider == ServiceProviders.GOOGLE.value and service_name in (
+            "stt",
+            "tts",
+        ):
+            try:
+                self._check_google_cloud_speech_config(service_name, service_config)
+            except ValueError as e:
+                return [{"model": service_name, "message": str(e)}]
+            return []
+
+        # Vertex slots (LLM, STT, TTS, embeddings) choose between an API key and
+        # service-account/ADC per model; the catalogue decides what is allowed.
         if provider == ServiceProviders.GOOGLE_VERTEX.value:
             try:
-                if not self._check_google_vertex_llm_api_key(provider, service_config):
-                    return [
-                        {
-                            "model": service_name,
-                            "message": f"Invalid {provider} configuration",
-                        }
-                    ]
+                self._check_google_vertex_config(service_name, service_config)
             except ValueError as e:
                 return [{"model": service_name, "message": str(e)}]
             return []
@@ -488,10 +552,54 @@ class UserConfigurationValidator:
         return True
 
     def _check_google_vertex_llm_api_key(self, model: str, service_config) -> bool:
-        if not getattr(service_config, "project_id", None):
-            raise ValueError("project_id is required for Google Vertex")
-        if not getattr(service_config, "location", None):
-            raise ValueError("location is required for Google Vertex")
+        return self._check_google_vertex_config("llm", service_config)
+
+    def _check_google_vertex_config(self, service_name: str, service_config) -> bool:
+        """Validate a Google Vertex slot without ever echoing a credential."""
+        keys = (
+            service_config.get_all_api_keys()
+            if hasattr(service_config, "get_all_api_keys")
+            else []
+        )
+        has_api_key = any(keys)
+        credentials = getattr(service_config, "credentials", None)
+        if not has_api_key:
+            if (
+                service_name != "tts"
+                and hasattr(service_config, "project_id")
+                and not service_config.project_id
+            ):
+                raise ValueError("project_id is required for Google Vertex")
+            if not getattr(service_config, "location", None):
+                raise ValueError("location is required for Google Vertex")
+        _validate_google_service_account_json(
+            credentials, "Google Vertex", require_fields=False
+        )
+        error = check_vertex_config(
+            service_name,
+            model=service_config.model,
+            location=getattr(service_config, "location", None),
+            has_api_key=has_api_key,
+            has_credentials=bool(credentials),
+            project_id=getattr(service_config, "project_id", None),
+            voice=getattr(service_config, "voice", None),
+        )
+        if error:
+            raise ValueError(error)
+        return True
+
+    def _check_google_cloud_speech_config(self, service_name: str, service_config):
+        label = f"Google Cloud {'Speech-to-Text' if service_name == 'stt' else 'Text-to-Speech'}"
+        _validate_google_service_account_json(
+            getattr(service_config, "credentials", None), label
+        )
+        if service_name == "stt" and service_config.model == "chirp_3":
+            # Chirp 3 is only served from the us and eu multi-regions.
+            location = (getattr(service_config, "location", None) or "").strip()
+            if location not in ("us", "eu"):
+                raise ValueError(
+                    "Google Speech-to-Text model chirp_3 requires location 'us' or 'eu'"
+                )
         return True
 
     def _check_aws_bedrock_api_key(self, model: str, service_config) -> bool:

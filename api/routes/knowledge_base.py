@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from api.db import db_client
+from api.db.knowledge_base_client import EmbeddingIndexMismatchError
 from api.enums import PostHogEvent
 from api.schemas.knowledge_base import (
     ChunkSearchRequestSchema,
@@ -411,6 +412,7 @@ async def search_chunks(
             endpoint=embeddings_endpoint,
             api_version=embeddings_api_version,
             resolve_correlation=True,
+            organization_id=user.selected_organization_id,
         )
 
         # Perform search
@@ -449,6 +451,8 @@ async def search_chunks(
             total_results=len(chunks),
         )
 
+    except EmbeddingIndexMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except Exception as exc:
         logger.error(f"Error searching chunks: {exc}")
         raise HTTPException(status_code=500, detail="Failed to search chunks") from exc

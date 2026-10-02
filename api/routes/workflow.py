@@ -10,7 +10,7 @@ from httpx import HTTPStatusError
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError
 
-from api.constants import DEPLOYMENT_MODE
+from api.constants import DEPLOYMENT_MODE, slot_template_on_create_enabled
 from api.db import db_client
 from api.db.agent_trigger_client import TriggerPathConflictError
 from api.db.models import UserModel
@@ -36,6 +36,9 @@ from api.services.configuration.ai_model_configuration import (
     merge_ai_model_configuration_v2_secrets,
 )
 from api.services.configuration.check_validity import UserConfigurationValidator
+from api.services.configuration.effective_readback import (
+    build_effective_model_configuration_readback,
+)
 from api.services.configuration.masking import (
     mask_workflow_configurations,
     mask_workflow_definition,
@@ -46,6 +49,7 @@ from api.services.configuration.resolve import (
     enrich_overrides_with_api_keys,
     resolve_effective_config,
 )
+from api.services.configuration.safe_errors import safe_exception_detail
 from api.services.mps_service_key_client import mps_service_key_client
 from api.services.posthog_client import capture_event
 from api.services.reports import generate_workflow_report_csv
@@ -452,6 +456,42 @@ def _transform_schema_errors(
     return out
 
 
+async def _seed_slots_if_enabled(user: UserModel, workflow_id: int) -> None:
+    """Copy the organization default into a new workflow's own slots (opt-in).
+
+    Fails closed: the workflow keeps its ``pending`` marker and will not run until
+    the copy is retried with ``POST /workflow/{id}/model-slots/apply-template``.
+    """
+    if not slot_template_on_create_enabled():
+        return
+    from api.services.configuration.slot_settings import (
+        SlotSettingsError,
+        apply_organization_template,
+    )
+
+    try:
+        await apply_organization_template(
+            repo=db_client,
+            organization_id=user.selected_organization_id,
+            workflow_id=workflow_id,
+            created_by=str(user.provider_id),
+        )
+    except SlotSettingsError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "slot_template_incomplete",
+                "message": (
+                    "The workflow was created but its model configuration was not "
+                    "copied, so it cannot run yet. Retry the copy."
+                ),
+                "workflow_id": workflow_id,
+                "cause": exc.code,
+                "retry": f"POST /api/v1/workflow/{workflow_id}/model-slots/apply-template",
+            },
+        ) from None
+
+
 @router.post(
     "/create/definition",
     **sdk_expose(
@@ -526,6 +566,8 @@ async def create_workflow(
             organization_id=user.selected_organization_id,
             trigger_paths=trigger_paths,
         )
+
+    await _seed_slots_if_enabled(user, workflow.id)
 
     return {
         "id": workflow.id,
@@ -627,6 +669,8 @@ async def create_workflow_from_template(
                 organization_id=user.selected_organization_id,
                 trigger_paths=trigger_paths,
             )
+
+        await _seed_slots_if_enabled(user, workflow.id)
 
         return {
             "id": workflow.id,
@@ -815,6 +859,46 @@ async def get_workflow(
         "version_number": active_def.version_number if active_def else None,
         "version_status": active_def.status if active_def else None,
         "workflow_uuid": workflow.workflow_uuid,
+    }
+
+
+@router.get("/{workflow_id}/effective-model-configuration")
+async def get_workflow_effective_model_configuration(
+    workflow_id: int,
+    version: Literal["published", "draft"] = Query("published"),
+    user: UserModel = Depends(get_user_with_selected_organization),
+) -> dict:
+    """Model configuration a run of this workflow will use, without secrets.
+
+    `published` is what live calls bind to; `draft` is what a test run gets.
+    Credentials are reported as status only (kind, configured, account email).
+    """
+    workflow = await db_client.get_workflow(
+        workflow_id, organization_id=user.selected_organization_id
+    )
+    if workflow is None:
+        raise HTTPException(
+            status_code=404, detail=f"Workflow with id {workflow_id} not found"
+        )
+    if version == "draft":
+        definition = await db_client.get_draft_version(workflow_id)
+        if definition is None:
+            raise HTTPException(status_code=404, detail="Workflow has no draft")
+    else:
+        definition = workflow.released_definition
+        if definition is None:
+            raise HTTPException(status_code=404, detail="Workflow is not published")
+    readback = await build_effective_model_configuration_readback(
+        organization_id=user.selected_organization_id,
+        workflow_configurations=definition.workflow_configurations,
+        workflow_id=workflow.id if version == "published" else None,
+    )
+    return {
+        "workflow_id": workflow.id,
+        "version": version,
+        "definition_id": definition.id,
+        "version_number": definition.version_number,
+        **readback,
     }
 
 
@@ -1227,7 +1311,9 @@ async def update_workflow(
                     created_by=user.provider_id,
                 )
             except (ValidationError, ValueError) as e:
-                raise HTTPException(status_code=422, detail=str(e))
+                raise HTTPException(
+                    status_code=422, detail=safe_exception_detail(e)
+                ) from None
             workflow_configurations = {
                 **workflow_configurations,
                 WORKFLOW_MODEL_CONFIGURATION_V2_OVERRIDE_KEY: v2_override.model_dump(
@@ -1279,8 +1365,10 @@ async def update_workflow(
                         organization_id=user.selected_organization_id,
                         created_by=user.provider_id,
                     )
-            except ValueError as e:
-                raise HTTPException(status_code=422, detail=str(e))
+            except (ValidationError, ValueError) as e:
+                raise HTTPException(
+                    status_code=422, detail=safe_exception_detail(e)
+                ) from None
             if resolved_config.source == "organization_v2":
                 workflow_configurations = {
                     **workflow_configurations,
@@ -1360,6 +1448,9 @@ async def update_workflow(
         }
     except HTTPException:
         raise
+    except ValidationError as e:
+        # str(e) would echo the rejected input, which can include API keys.
+        raise HTTPException(status_code=422, detail=safe_exception_detail(e)) from None
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -1390,6 +1481,8 @@ async def duplicate_workflow_endpoint(
             },
         )
 
+        await _seed_slots_if_enabled(user, workflow.id)
+
         return {
             "id": workflow.id,
             "name": workflow.name,
@@ -1405,6 +1498,8 @@ async def duplicate_workflow_endpoint(
                 workflow.workflow_configurations
             ),
         }
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -1720,6 +1815,8 @@ async def duplicate_workflow_template(
             organization_id=user.selected_organization_id,
             trigger_paths=trigger_paths,
         )
+
+    await _seed_slots_if_enabled(user, workflow.id)
 
     return {
         "id": workflow.id,

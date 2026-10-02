@@ -259,7 +259,7 @@ async def _perform_retrieval(
 
         # Perform vector similarity search on chunked documents
         if chunked_uuids is None or len(chunked_uuids) > 0:
-            if not embeddings_api_key:
+            if not embeddings_api_key and embeddings_provider != "google_vertex":
                 raise ValueError(
                     "Embeddings API key not configured. Please set your API key in "
                     "Model Configurations > Embedding."
@@ -276,6 +276,7 @@ async def _perform_retrieval(
                 endpoint=embeddings_endpoint,
                 api_version=embeddings_api_version,
                 correlation_id=correlation_id,
+                organization_id=organization_id,
             )
 
             results = await embedding_service.search_similar_chunks(

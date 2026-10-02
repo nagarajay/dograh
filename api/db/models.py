@@ -575,6 +575,10 @@ class WorkflowModel(Base):
     workflow_configurations = Column(
         JSON, nullable=False, default=dict, server_default=text("'{}'::json")
     )
+    # "pending" while the organization-default template has not been copied into
+    # the workflow's own slots (WORKFLOW_SLOT_TEMPLATE_ON_CREATE). A pending
+    # workflow refuses to run. NULL for every other workflow.
+    slot_template_status = Column(String(16), nullable=True)
     runs = relationship("WorkflowRunModel", back_populates="workflow")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
@@ -1482,6 +1486,79 @@ class WorkflowRecordingModel(Base):
     )
 
 
+class GeminiTTSSamplePackModel(Base):
+    """Immutable definition and lifecycle for a platform-owned sample pack."""
+
+    __tablename__ = "gemini_tts_sample_packs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String(32), nullable=False)
+    model_id = Column(String(128), nullable=False)
+    catalog_revision = Column(String(64), nullable=False)
+    location = Column(String(128), nullable=False)
+    language = Column(String(32), nullable=False)
+    style_text = Column(Text, nullable=False)
+    sample_text = Column(Text, nullable=False)
+    request_fingerprint = Column(String(64), nullable=False, unique=True)
+    status = Column(String(16), nullable=False, server_default="queued")
+    created_by = Column(String(128), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    assets = relationship(
+        "GeminiTTSSampleAssetModel",
+        back_populates="pack",
+        cascade="all, delete-orphan",
+        order_by="GeminiTTSSampleAssetModel.id",
+    )
+
+
+class GeminiTTSSampleAssetModel(Base):
+    """One immutable generated version for a catalog voice."""
+
+    __tablename__ = "gemini_tts_sample_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pack_id = Column(
+        Integer,
+        ForeignKey("gemini_tts_sample_packs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    voice_id = Column(String(64), nullable=False)
+    gender = Column(String(16), nullable=False)
+    version = Column(Integer, nullable=False, server_default="1")
+    is_current = Column(Boolean, nullable=False, server_default="false")
+    status = Column(String(16), nullable=False, server_default="queued")
+    storage_key = Column(String(512), nullable=True)
+    playable_format = Column(String(16), nullable=True)
+    mime_type = Column(String(64), nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    sha256 = Column(String(64), nullable=True)
+    generation_metadata = Column(JSON, nullable=False, default=dict, server_default=text("'{}'::json"))
+    error_message = Column(Text, nullable=True)
+    attempts = Column(Integer, nullable=False, server_default="0")
+    generated_at = Column(DateTime(timezone=True), nullable=True)
+
+    pack = relationship("GeminiTTSSamplePackModel", back_populates="assets")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pack_id", "voice_id", "version", name="uq_gemini_tts_sample_asset_version"
+        ),
+        Index(
+            "uq_gemini_tts_sample_asset_current",
+            "pack_id", "voice_id", unique=True,
+            postgresql_where=text("is_current"),
+        ),
+        Index(
+            "uq_gemini_tts_sample_asset_active",
+            "pack_id", "voice_id", unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        Index("ix_gemini_tts_sample_assets_pack_id", "pack_id"),
+    )
+
+
 class KnowledgeBaseChunkModel(Base):
     """Model for storing document chunks with vector embeddings.
 
@@ -1568,4 +1645,102 @@ class KnowledgeBaseChunkModel(Base):
             postgresql_with={"lists": 100},  # Adjust based on dataset size
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
+    )
+
+
+class ProviderCredentialModel(Base):
+    """Versioned, encrypted provider secret. Rows are immutable once written.
+
+    ``ciphertext`` is a Fernet token over the secret payload; the plaintext never
+    reaches this table, logs or any API response. A rotation adds a new
+    ``version``; slot settings pin an exact ``(credential_ref, version)``.
+    """
+
+    __tablename__ = "provider_credentials"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    credential_ref = Column(String(64), nullable=False)
+    version = Column(Integer, nullable=False)
+    label = Column(String(128), nullable=True)
+    kind = Column(
+        String(32), nullable=False
+    )  # api_key | service_account_json | aws_iam
+    ciphertext = Column(Text, nullable=False)
+    key_id = Column(String(16), nullable=False)
+    # Non-secret pointer to the canonical copy (e.g. AVSIQ Vault path + version).
+    source_ref = Column(String(255), nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "credential_ref",
+            "version",
+            name="uq_provider_credentials_org_ref_version",
+        ),
+        Index("ix_provider_credentials_organization_id", "organization_id"),
+    )
+
+
+class WorkflowSlotSettingModel(Base):
+    """One immutable version of one model slot (llm/stt/tts/embeddings) of a workflow.
+
+    ``config`` never holds secrets; credentials are referenced by
+    ``credential_ref``/``credential_version``.
+    """
+
+    __tablename__ = "workflow_slot_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_id = Column(
+        Integer, ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False
+    )
+    slot = Column(String(16), nullable=False)
+    version = Column(Integer, nullable=False)
+    state = Column(String(16), nullable=False)  # draft|published|superseded|discarded
+    config = Column(JSON, nullable=False, default=dict)
+    credential_ref = Column(String(64), nullable=True)
+    credential_version = Column(Integer, nullable=True)
+    validation_status = Column(
+        String(16), nullable=False, default="unvalidated", server_default="unvalidated"
+    )
+    validated_at = Column(DateTime(timezone=True), nullable=True)
+    based_on_version = Column(Integer, nullable=True)
+    origin = Column(String(24), nullable=False, default="edit", server_default="edit")
+    change_note = Column(String(255), nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    published_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow_id", "slot", "version", name="uq_workflow_slot_settings_version"
+        ),
+        Index("ix_workflow_slot_settings_workflow_slot", "workflow_id", "slot"),
+    )
+
+
+class WorkflowSlotStateModel(Base):
+    """Pointer row per (workflow, slot); ``revision`` is the optimistic-lock counter."""
+
+    __tablename__ = "workflow_slot_state"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_id = Column(
+        Integer, ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False
+    )
+    slot = Column(String(16), nullable=False)
+    published_version = Column(Integer, nullable=True)
+    draft_version = Column(Integer, nullable=True)
+    last_version = Column(Integer, nullable=False, default=0, server_default="0")
+    revision = Column(Integer, nullable=False, default=0, server_default="0")
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "slot", name="uq_workflow_slot_state"),
     )

@@ -55,6 +55,7 @@ def _workflow_run(
     )
     return SimpleNamespace(
         workflow=SimpleNamespace(
+            id=5,
             organization_id=1,
             workflow_configurations=workflow_configurations or {},
         ),
@@ -144,6 +145,7 @@ async def test_workflow_llm_delegates_typed_config_to_central_factory():
     config_resolver.assert_awaited_once_with(
         organization_id=1,
         workflow_configurations={"source": "workflow"},
+        workflow_id=5,
     )
     factory.assert_called_once_with(
         config,

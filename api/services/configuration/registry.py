@@ -67,6 +67,7 @@ from api.services.configuration.options.google import (
     GOOGLE_VERTEX_LOCATIONS,
     GOOGLE_VERTEX_MODELS,
 )
+from api.services.configuration.options.google_vertex_catalog import vertex_models
 
 
 class ServiceType(Enum):
@@ -483,7 +484,13 @@ class GoogleVertexLLMConfiguration(BaseLLMConfiguration):
             "allow_custom_input": True,
         },
     )
-    project_id: str = Field(description="Google Cloud project ID for Vertex AI.")
+    project_id: str | None = Field(
+        default=None,
+        description=(
+            "Google Cloud project ID for Vertex AI. Required with service-account "
+            "or ADC authentication; not used with a Vertex API key."
+        ),
+    )
     location: str = Field(
         default=GOOGLE_VERTEX_DEFAULT_LOCATION,
         description=(
@@ -491,7 +498,8 @@ class GoogleVertexLLMConfiguration(BaseLLMConfiguration):
             "'eu' and 'us' are multi-regions that keep processing inside that "
             "geography; a single region such as 'europe-west4' pins it further; "
             "'global' routes anywhere in the world and carries no data "
-            "residency guarantee. Model availability varies by location."
+            "residency guarantee. Model availability varies by location. "
+            "Ignored with a Vertex API key (express mode has no location)."
         ),
         json_schema_extra={
             "examples": list(GOOGLE_VERTEX_LOCATIONS),
@@ -501,16 +509,18 @@ class GoogleVertexLLMConfiguration(BaseLLMConfiguration):
     credentials: str | None = Field(
         default=None,
         description=(
-            "Paste the entire service-account JSON file contents. If omitted, "
-            "falls back to Application Default Credentials (ADC)."
+            "Paste the entire service-account JSON file contents. If omitted "
+            "and no API key is set, falls back to Application Default "
+            "Credentials (ADC)."
         ),
         json_schema_extra={"multiline": True},
     )
     api_key: str | list[str] | None = Field(
         default=None,
         description=(
-            "Not used for Vertex AI — authentication is via the service account "
-            "in `credentials` (or ADC). Leave blank."
+            "Optional Vertex AI API key (express mode). Use instead of "
+            "`credentials`, not together with it. Leave blank for service "
+            "account / ADC."
         ),
     )
 
@@ -1253,6 +1263,84 @@ OPENAI_TTS_MODELS = ["gpt-4o-mini-tts"]
 
 
 @register_tts
+class GoogleVertexTTSConfiguration(BaseTTSConfiguration):
+    model_config = GOOGLE_VERTEX_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.GOOGLE_VERTEX] = ServiceProviders.GOOGLE_VERTEX
+    model: str = Field(
+        default="gemini-2.5-flash-tts",
+        description=(
+            "Gemini-TTS model, served by Cloud Text-to-Speech with "
+            "Vertex/Cloud credentials (service account or ADC)."
+        ),
+        json_schema_extra={"examples": list(vertex_models("tts"))},
+    )
+    voice: str = Field(
+        default="Kore",
+        description="Gemini-TTS voice name (for example Kore, Puck, Charon).",
+        json_schema_extra={
+            "examples": [
+                "Kore",
+                "Puck",
+                "Charon",
+                "Aoede",
+                "Fenrir",
+                "Leda",
+                "Zephyr",
+            ],
+            "allow_custom_input": True,
+        },
+    )
+    language: str = Field(
+        default="en-US",
+        description="BCP-47 language code for synthesis.",
+        json_schema_extra={
+            "examples": GOOGLE_TTS_LANGUAGES,
+            "allow_custom_input": True,
+        },
+    )
+    prompt: str | None = Field(
+        default=None,
+        description="Optional natural-language style instruction (tone, pace, accent).",
+    )
+    project_id: str | None = Field(
+        default=None,
+        description=(
+            "Google Cloud project ID. Used with an API key to send the complete "
+            "projects/{project}/locations/{location}/... model resource; required "
+            "for the Vertex API-key Gemini-TTS path."
+        ),
+    )
+    location: str = Field(
+        default=GOOGLE_VERTEX_DEFAULT_LOCATION,
+        description=(
+            "Cloud Text-to-Speech endpoint: 'global', 'us', 'eu' or a region. "
+            "gemini-3.1-flash-tts-preview is only served from 'global'."
+        ),
+        json_schema_extra={
+            "examples": ["global", "us", "eu"],
+            "allow_custom_input": True,
+        },
+    )
+    credentials: str | None = Field(
+        default=None,
+        description=(
+            "Paste the entire Google Cloud service-account JSON. If omitted, "
+            "the server falls back to Application Default Credentials (ADC)."
+        ),
+        json_schema_extra={"multiline": True},
+    )
+    api_key: str | list[str] | None = Field(
+        default=None,
+        description=(
+            "Vertex API key. Uses the Vertex streamGenerateContent API (global "
+            "endpoint), the one Gemini-TTS method Google lists as key-capable. "
+            "The Cloud Text-to-Speech API (service account / ADC) does not take "
+            "keys. Not combined with credentials."
+        ),
+    )
+
+
+@register_tts
 class OpenAITTSService(BaseTTSConfiguration):
     model_config = OPENAI_PROVIDER_MODEL_CONFIG
     provider: Literal[ServiceProviders.OPENAI] = ServiceProviders.OPENAI
@@ -1729,6 +1817,7 @@ TTSConfig = Annotated[
     Union[
         DeepgramTTSConfiguration,
         GoogleTTSConfiguration,
+        GoogleVertexTTSConfiguration,
         OpenAITTSService,
         ElevenlabsTTSConfiguration,
         CartesiaTTSConfiguration,
@@ -1868,6 +1957,55 @@ class GoogleSTTConfiguration(BaseSTTConfiguration):
     api_key: str | list[str] | None = Field(
         default=None,
         description="Not used for Google Cloud STT. Leave blank.",
+    )
+
+
+@register_stt
+class GoogleVertexSTTConfiguration(BaseSTTConfiguration):
+    model_config = GOOGLE_VERTEX_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.GOOGLE_VERTEX] = ServiceProviders.GOOGLE_VERTEX
+    model: str = Field(
+        default="gemini-3.5-transcribe-live-preview",
+        description=(
+            "Gemini transcription model on Vertex AI, streamed over the Live "
+            "API. Preview model; only served from the 'global' location."
+        ),
+        json_schema_extra={"examples": list(vertex_models("stt"))},
+    )
+    language: str | None = Field(
+        default=None,
+        description=(
+            "Optional BCP-47 language hint (for example 'en-US'). Leave blank "
+            "to let the model detect the language per utterance."
+        ),
+        json_schema_extra={
+            "examples": GOOGLE_STT_LANGUAGES,
+            "allow_custom_input": True,
+        },
+    )
+    project_id: str | None = Field(
+        default=None,
+        description="Google Cloud project ID. Required for service-account / ADC, and with an API key.",
+    )
+    location: str = Field(
+        default=GOOGLE_VERTEX_DEFAULT_LOCATION,
+        description="Vertex AI location. Gemini 3.5 Transcribe is served from 'global'.",
+    )
+    credentials: str | None = Field(
+        default=None,
+        description=(
+            "Paste the entire service-account JSON. If omitted, the server "
+            "falls back to Application Default Credentials (ADC)."
+        ),
+        json_schema_extra={"multiline": True},
+    )
+    api_key: str | list[str] | None = Field(
+        default=None,
+        description=(
+            "Vertex API key. Google does not document API keys for the Live API; "
+            "a probe showed it works with project_id set (complete model "
+            "resource). Without project_id it is rejected."
+        ),
     )
 
 
@@ -2165,6 +2303,7 @@ STTConfig = Annotated[
         CartesiaSTTConfiguration,
         OpenAISTTConfiguration,
         GoogleSTTConfiguration,
+        GoogleVertexSTTConfiguration,
         DograhSTTService,
         SpeechmaticsSTTConfiguration,
         SarvamSTTConfiguration,
@@ -2252,12 +2391,51 @@ class DograhEmbeddingsConfiguration(BaseEmbeddingsConfiguration):
     )
 
 
+@register_embeddings
+class GoogleVertexEmbeddingsConfiguration(BaseEmbeddingsConfiguration):
+    model_config = GOOGLE_VERTEX_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.GOOGLE_VERTEX] = ServiceProviders.GOOGLE_VERTEX
+    model: str = Field(
+        default="gemini-embedding-001",
+        description=(
+            "Vertex AI embedding model. Dograh requests 1536-dimensional "
+            "vectors (output_dimensionality) to match its knowledge-base index."
+        ),
+        json_schema_extra={"examples": list(vertex_models("embeddings"))},
+    )
+    project_id: str | None = Field(
+        default=None,
+        description="Google Cloud project ID. Required for service-account / ADC.",
+    )
+    location: str = Field(
+        default=GOOGLE_VERTEX_DEFAULT_LOCATION,
+        description="Vertex AI location, for example 'global' or 'us-central1'.",
+        json_schema_extra={"allow_custom_input": True},
+    )
+    credentials: str | None = Field(
+        default=None,
+        description=(
+            "Paste the entire service-account JSON. If omitted, the server "
+            "falls back to Application Default Credentials (ADC)."
+        ),
+        json_schema_extra={"multiline": True},
+    )
+    api_key: str | list[str] | None = Field(
+        default=None,
+        description=(
+            "Vertex API key. Not yet verified for embeddings; setting it is "
+            "rejected. Leave blank."
+        ),
+    )
+
+
 EmbeddingsConfig = Annotated[
     Union[
         OpenAIEmbeddingsConfiguration,
         OpenRouterEmbeddingsConfiguration,
         AzureOpenAIEmbeddingsConfiguration,
         DograhEmbeddingsConfiguration,
+        GoogleVertexEmbeddingsConfiguration,
     ],
     Field(discriminator="provider"),
 ]

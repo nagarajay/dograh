@@ -149,6 +149,25 @@ async def test_valid_key_is_accepted(platform_key):
     )
 
 
+@pytest.mark.asyncio
+async def test_legacy_dograh_platform_key_alias_is_accepted(monkeypatch):
+    import importlib
+
+    original = constants.PLATFORM_ADMIN_API_KEY
+    monkeypatch.delenv("PLATFORM_ADMIN_API_KEY", raising=False)
+    monkeypatch.setenv("DOGRAH_PLATFORM_ADMIN_API_KEY", PLATFORM_KEY)
+    importlib.reload(constants)
+    try:
+        assert (
+            await require_platform_admin(
+                x_platform_admin_key=PLATFORM_KEY, x_api_key=None
+            )
+            is None
+        )
+    finally:
+        constants.PLATFORM_ADMIN_API_KEY = original
+
+
 @pytest.mark.parametrize(
     "presented, expected_status",
     [
