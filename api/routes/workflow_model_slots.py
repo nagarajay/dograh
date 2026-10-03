@@ -34,19 +34,18 @@ from api.services.configuration.check_validity import UserConfigurationValidator
 from api.services.configuration.effective_readback import (
     build_effective_model_configuration_readback,
 )
-from api.services.configuration.slot_settings import (
-    SlotResolutionError,
-    SlotSettingsError,
-    WorkflowSlotService,
-    credential_summary,
-    version_view,
-)
 from api.services.configuration.options.google_vertex_catalog import (
     GEMINI_TTS_DOCUMENTATION_URL,
     gemini_tts_catalog_revision,
     gemini_tts_voices,
     get_vertex_model,
     vertex_models,
+)
+from api.services.configuration.slot_settings import (
+    SlotSettingsError,
+    WorkflowSlotService,
+    credential_summary,
+    version_view,
 )
 from api.services.storage import storage_fs
 
@@ -122,7 +121,9 @@ async def _build_google_vertex_tts_catalog(
                         "preview": entry.lifecycle == "preview",
                         "demo_url": GEMINI_TTS_DOCUMENTATION_URL,
                         "sample_url": (
-                            matching_samples.get((entry.id, voice.id), [])[0].get("sample_url")
+                            matching_samples.get((entry.id, voice.id), [])[0].get(
+                                "sample_url"
+                            )
                             if matching_samples.get((entry.id, voice.id))
                             else None
                         ),
@@ -186,6 +187,7 @@ async def get_platform_gemini_tts_catalog(
         sample_text=sample_text,
     )
 
+
 MAX_GROUP_SIZE = 50
 
 
@@ -199,17 +201,13 @@ def _http(exc: SlotSettingsError) -> HTTPException:
 
 async def _describe_effective(user: UserModel, workflow) -> dict:
     released = workflow.released_definition
-    try:
-        readback = await build_effective_model_configuration_readback(
-            organization_id=user.selected_organization_id,
-            workflow_configurations=(
-                released.workflow_configurations if released else None
-            ),
-            workflow_id=workflow.id,
-        )
-    except SlotResolutionError as exc:
-        # The live slot cannot be resolved; say so instead of guessing.
-        return {"error": str(exc)}
+    readback = await build_effective_model_configuration_readback(
+        organization_id=user.selected_organization_id,
+        workflow_configurations=(
+            released.workflow_configurations if released else None
+        ),
+        workflow_id=workflow.id,
+    )
     return {slot: readback.get(slot) for slot in ("llm", "stt", "tts", "embeddings")}
 
 

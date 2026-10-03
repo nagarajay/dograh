@@ -242,3 +242,40 @@ async def test_other_organization_cannot_retry(
             f"/api/v1/workflow/{workflow_id}/model-slots/apply-template"
         )
     assert resp.status_code == 404
+
+
+async def test_failed_copy_leaves_no_usable_orphan_credentials_and_retry_pins_its_own(
+    test_client_factory, user, org_template, db_session, monkeypatch
+):
+    real_seed = db_session.seed_published_slots
+
+    async def boom(**_):
+        raise RuntimeError("db exploded")
+
+    monkeypatch.setattr(db_session, "seed_published_slots", boom)
+    async with test_client_factory(user) as client:
+        resp = await _create(client)
+        workflow_id = resp.json()["detail"]["workflow_id"]
+        org_id = user.selected_organization_id
+        failed_copies = await db_session.list_provider_credentials(org_id)
+        assert failed_copies and all(c.revoked_at for c in failed_copies)
+        # Retry succeeds with a fresh copy that the slot actually pins.
+        monkeypatch.setattr(db_session, "seed_published_slots", real_seed)
+        retry = await client.post(
+            f"/api/v1/workflow/{workflow_id}/model-slots/apply-template"
+        )
+    assert retry.status_code == 200 and retry.json()["seeded_slots"] == ["llm"]
+    live = [
+        c
+        for c in await db_session.list_provider_credentials(org_id)
+        if not c.revoked_at
+    ]
+    assert len(live) == 1
+    assert (
+        await db_session.count_slot_usages_of_credential(
+            organization_id=org_id,
+            credential_ref=live[0].credential_ref,
+            version=live[0].version,
+        )
+        == 1
+    )

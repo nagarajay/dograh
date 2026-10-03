@@ -9,7 +9,7 @@ import json
 from typing import Any
 
 from api.services.configuration.ai_model_configuration import (
-    get_effective_ai_model_configuration_for_workflow,
+    resolve_effective_ai_model_configuration_for_workflow,
 )
 from api.services.configuration.masking import SERVICE_SECRET_FIELDS
 from api.services.configuration.options.google_vertex_catalog import (
@@ -106,20 +106,43 @@ def _describe_service(service: Any, section: str = "") -> dict[str, Any] | None:
     return described
 
 
+def _describe_issue(issue, service: Any) -> dict[str, Any]:
+    """Per-slot resolution failure in the shape AVSIQ's ``effective.error`` expects.
+
+    Provider and model are non-secret and say which configuration failed; they
+    come from the unresolved published slot, else from what the slot would
+    otherwise inherit. The message never contains secret material.
+    """
+    return {
+        "provider": issue.provider or getattr(service, "provider", None),
+        "model": issue.model or getattr(service, "model", None),
+        "error": issue.message,
+        "error_code": issue.code,
+    }
+
+
 async def build_effective_model_configuration_readback(
     *,
     organization_id: int,
     workflow_configurations: dict | None,
     workflow_id: int | None = None,
 ) -> dict[str, Any]:
-    effective = await get_effective_ai_model_configuration_for_workflow(
+    """Readback of the configuration a run gets, with per-slot resolution errors.
+
+    Uses the runtime's resolver. A slot that cannot be resolved is reported as
+    ``{"error", "error_code", "provider", "model"}`` rather than failing the
+    whole readback or being shown as unconfigured; the other slots still read.
+    """
+    effective, issues = await resolve_effective_ai_model_configuration_for_workflow(
         organization_id=organization_id,
         workflow_configurations=workflow_configurations,
         workflow_id=workflow_id,
     )
     readback: dict[str, Any] = {"is_realtime": bool(effective.is_realtime)}
     for section in _SERVICE_SECTIONS:
-        readback[section] = _describe_service(
-            getattr(effective, section, None), section
-        )
+        service = getattr(effective, section, None)
+        if section in issues:
+            readback[section] = _describe_issue(issues[section], service)
+        else:
+            readback[section] = _describe_service(service, section)
     return readback

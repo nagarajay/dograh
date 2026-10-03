@@ -412,7 +412,7 @@ async def search_chunks(
             endpoint=embeddings_endpoint,
             api_version=embeddings_api_version,
             resolve_correlation=True,
-            organization_id=user.selected_organization_id,
+            embeddings_config=effective_config.embeddings,
         )
 
         # Perform search

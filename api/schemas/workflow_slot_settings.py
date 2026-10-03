@@ -92,7 +92,16 @@ class SlotStatus(BaseModel):
     draft_version: Optional[int] = None
     published: Optional[SlotVersion] = None
     draft: Optional[SlotVersion] = None
-    effective: Optional[dict[str, Any]] = None
+    effective: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "What a run resolves for this slot, without secrets. When the slot "
+            "cannot be resolved (revoked credential, missing encryption key, "
+            "pending template copy) it carries `error` (sanitized, actionable), "
+            "`error_code`, and the `provider`/`model` that failed; `source` still "
+            "says where the slot comes from. `null` only when nothing is configured."
+        ),
+    )
 
 
 class WorkflowSlotsResponse(BaseModel):

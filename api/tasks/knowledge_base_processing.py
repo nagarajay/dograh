@@ -144,6 +144,7 @@ async def process_knowledge_base_document(
         embeddings_base_url = None
         embeddings_endpoint = None
         embeddings_api_version = None
+        embeddings_config = None
         if retrieval_mode == "chunked":
             from api.services.configuration.ai_model_configuration import (
                 apply_managed_embeddings_base_url,
@@ -155,6 +156,7 @@ async def process_knowledge_base_document(
             )
             effective_config = resolved_config.effective
             if effective_config.embeddings:
+                embeddings_config = effective_config.embeddings
                 embeddings_provider = getattr(
                     effective_config.embeddings, "provider", None
                 )
@@ -225,7 +227,7 @@ async def process_knowledge_base_document(
             endpoint=embeddings_endpoint,
             api_version=embeddings_api_version,
             resolve_correlation=True,
-            organization_id=organization_id,
+            embeddings_config=embeddings_config,
         )
 
         # Ingestion must land in the same embedding space retrieval will query.

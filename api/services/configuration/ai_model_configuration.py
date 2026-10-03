@@ -83,36 +83,67 @@ async def get_resolved_ai_model_configuration(
     )
 
 
-async def get_effective_ai_model_configuration_for_workflow(
+async def resolve_effective_ai_model_configuration_for_workflow(
     *,
     organization_id: int | None,
     workflow_configurations: dict | None,
     workflow_id: int | None = None,
-) -> EffectiveAIModelConfiguration:
-    """Effective model configuration for a workflow run.
+):
+    """``(effective, issues)`` for a workflow run: the single resolution path.
 
     Base: the workflow's v2 override, else organization configuration plus any
     legacy ``model_overrides``. Then, when ``workflow_id`` is given, each slot the
     workflow has *published* per-slot settings for replaces the base value. A
-    workflow without published slots is unaffected.
+    workflow without published slots is unaffected. ``issues`` maps a slot to
+    why its published settings (or the pending template) cannot be resolved; the
+    runtime and the inspection endpoints both go through here, so a draft or
+    published readback can never disagree with the configuration a run gets.
     """
     effective = await _base_effective_configuration(
         organization_id=organization_id,
         workflow_configurations=workflow_configurations,
     )
     if workflow_id is None or organization_id is None:
-        return effective
+        return effective, {}
 
-    from api.services.configuration.slot_settings import load_published_overlay
+    from api.services.configuration.slot_settings import (
+        load_published_overlay_with_issues,
+    )
 
-    overlay = await load_published_overlay(
+    overlay, issues = await load_published_overlay_with_issues(
         repo=db_client, workflow_id=workflow_id, organization_id=organization_id
     )
-    if not overlay:
-        return effective
-    return effective.model_copy(
-        update={slot: resolved.service for slot, resolved in overlay.items()}
+    if overlay:
+        effective = effective.model_copy(
+            update={slot: resolved.service for slot, resolved in overlay.items()}
+        )
+    return effective, issues
+
+
+async def get_effective_ai_model_configuration_for_workflow(
+    *,
+    organization_id: int | None,
+    workflow_configurations: dict | None,
+    workflow_id: int | None = None,
+) -> EffectiveAIModelConfiguration:
+    """Effective model configuration a run uses; raises when a slot cannot resolve.
+
+    Runtime must fail the call rather than fall back to another provider.
+    """
+    effective, issues = await resolve_effective_ai_model_configuration_for_workflow(
+        organization_id=organization_id,
+        workflow_configurations=workflow_configurations,
+        workflow_id=workflow_id,
     )
+    if issues:
+        from api.services.configuration.slot_settings import (
+            SLOTS,
+            SlotResolutionError,
+        )
+
+        issue = issues[next(slot for slot in SLOTS if slot in issues)]
+        raise SlotResolutionError(issue.message, issue.code)
+    return effective
 
 
 async def _base_effective_configuration(

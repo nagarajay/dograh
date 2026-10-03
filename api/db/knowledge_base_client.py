@@ -32,7 +32,8 @@ class KnowledgeBaseClient(BaseDBClient):
     ) -> List[dict]:
         """Distinct ``(embedding_model, embedding_dimension)`` pairs with chunk counts.
 
-        Only active documents count. The knowledge base is scoped to the
+        Only active documents count (there is no reactivation endpoint today; a
+        future one must re-run the embedding compatibility check). The knowledge base is scoped to the
         organization (there is no per-index configuration), so this is the set
         of embedding configurations retrieval must match.
         """

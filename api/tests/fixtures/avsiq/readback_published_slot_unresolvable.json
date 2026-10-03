@@ -1,0 +1,21 @@
+{
+  "workflow_id": 7,
+  "workflow_uuid": "00000000-0000-0000-0000-000000000007",
+  "template_status": null,
+  "slots": [
+    {
+      "slot": "llm", "revision": 2, "source": "workflow_slot",
+      "published_version": 1, "draft_version": null,
+      "published": {"version": 1, "state": "published", "config": {"provider": "openai", "model": "gpt-4.1-mini"},
+                    "credential": {"credential_ref": "cred_example", "version": 1},
+                    "validation_status": "valid", "origin": "edit"},
+      "draft": null,
+      "effective": {"provider": "openai", "model": "gpt-4.1-mini", "error": "llm slot v1 of workflow 7: credential cred_example v1 is revoked", "error_code": "credential_revoked"}
+    },
+    {
+      "slot": "stt", "revision": 0, "source": "organization_default_inherited",
+      "published_version": null, "draft_version": null, "published": null, "draft": null,
+      "effective": {"provider": "deepgram", "model": "nova-3-general", "credential": {"kind": "api_key", "configured": true}}
+    }
+  ]
+}

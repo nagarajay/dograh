@@ -67,8 +67,13 @@ async def test_readback_never_contains_secrets(monkeypatch):
     async def fake(**_):
         return effective
 
+    async def resolved(**kwargs):
+        return await fake(**kwargs), {}
+
     monkeypatch.setattr(
-        effective_readback, "get_effective_ai_model_configuration_for_workflow", fake
+        effective_readback,
+        "resolve_effective_ai_model_configuration_for_workflow",
+        resolved,
     )
     out = await effective_readback.build_effective_model_configuration_readback(
         organization_id=1, workflow_configurations={}

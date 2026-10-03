@@ -31,6 +31,7 @@ async def retrieve_from_knowledge_base(
     embeddings_api_version: Optional[str] = None,
     correlation_id: Optional[str] = None,
     tracing_context=None,
+    embeddings_config: Any = None,
 ) -> Dict[str, Any]:
     """Retrieve relevant information from the knowledge base using vector similarity search.
 
@@ -48,6 +49,9 @@ async def retrieve_from_knowledge_base(
         embeddings_model: Optional model ID for embedding service
         embeddings_base_url: Optional base URL for embedding service
         tracing_context: Optional OpenTelemetry context for tracing
+        embeddings_config: The effective embeddings service configuration the
+            run resolved. Provider-specific fields (Vertex project, location,
+            credentials) come from this one object, never from a second lookup.
 
     Returns:
         Dictionary containing:
@@ -77,6 +81,7 @@ async def retrieve_from_knowledge_base(
                 embeddings_endpoint,
                 embeddings_api_version,
                 correlation_id,
+                embeddings_config=embeddings_config,
             )
 
         # Create span with parent context
@@ -117,6 +122,7 @@ async def retrieve_from_knowledge_base(
                         embeddings_endpoint,
                         embeddings_api_version,
                         correlation_id,
+                        embeddings_config=embeddings_config,
                     )
 
                     # Add result metadata to span
@@ -195,6 +201,7 @@ async def retrieve_from_knowledge_base(
                 embeddings_endpoint,
                 embeddings_api_version,
                 correlation_id,
+                embeddings_config=embeddings_config,
             )
     else:
         # Tracing is disabled - perform retrieval without tracing
@@ -210,6 +217,7 @@ async def retrieve_from_knowledge_base(
             embeddings_endpoint,
             embeddings_api_version,
             correlation_id,
+            embeddings_config=embeddings_config,
         )
 
 
@@ -225,6 +233,7 @@ async def _perform_retrieval(
     embeddings_endpoint: Optional[str] = None,
     embeddings_api_version: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    embeddings_config: Any = None,
 ) -> Dict[str, Any]:
     """Internal function to perform the actual retrieval operation.
 
@@ -276,7 +285,7 @@ async def _perform_retrieval(
                 endpoint=embeddings_endpoint,
                 api_version=embeddings_api_version,
                 correlation_id=correlation_id,
-                organization_id=organization_id,
+                embeddings_config=embeddings_config,
             )
 
             results = await embedding_service.search_similar_chunks(

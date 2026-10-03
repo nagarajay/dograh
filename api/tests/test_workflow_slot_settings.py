@@ -5,7 +5,9 @@ provider validator is replaced by a recording fake wherever a live check would r
 """
 
 import json
+from pathlib import Path
 
+import jsonschema
 import pytest
 from cryptography.fernet import Fernet
 from loguru import logger
@@ -393,15 +395,34 @@ async def test_cannot_revoke_a_credential_that_is_live_and_rollback_to_revoked_f
     )
 
 
+async def _force_revoke(async_session, ref, version=1):
+    """Revoke behind the API's back (the API refuses while a slot is live).
+
+    Runtime must still fail closed if a live slot's credential is revoked by
+    some other path, e.g. an operator's SQL.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+
+    await async_session.execute(
+        update(ProviderCredentialModel)
+        .where(
+            ProviderCredentialModel.credential_ref == ref,
+            ProviderCredentialModel.version == version,
+        )
+        .values(revoked_at=datetime.now(UTC))
+    )
+    await async_session.flush()
+
+
 async def test_runtime_fails_closed_when_pinned_credential_is_revoked(
-    test_client_factory, world, fake_validator, db_session
+    test_client_factory, world, fake_validator, db_session, async_session
 ):
     async with test_client_factory(world["user"]) as client:
         cred = await _cred(client)
         await _publish(client, world["wf1"], "llm", LLM_CFG, cred, 0)
-    await db_session.revoke_provider_credential_version(
-        world["org"].id, cred["credential_ref"], 1
-    )
+    await _force_revoke(async_session, cred["credential_ref"])
     with pytest.raises(slot_settings.SlotResolutionError):
         await slot_settings.load_published_overlay(
             repo=db_session,
@@ -945,6 +966,58 @@ async def test_publish_rechecks_embeddings_if_index_changed_after_validation(
     assert blocked.json()["detail"]["code"] == "embedding_index_incompatible"
 
 
+@pytest.fixture
+def org_embeddings_model(monkeypatch):
+    """The organization's ingestion model (the index is organization-wide)."""
+    cfg = OpenAIEmbeddingsConfiguration(
+        api_key="org-key", model="text-embedding-3-small"
+    )
+
+    async def resolved(**_):
+        return type(
+            "R", (), {"effective": EffectiveAIModelConfiguration(embeddings=cfg)}
+        )()
+
+    monkeypatch.setattr(aimc, "get_resolved_ai_model_configuration", resolved)
+
+
+async def test_embeddings_slot_must_use_the_organization_index_model(
+    test_client_factory, world, fake_validator, org_embeddings_model
+):
+    """Ingestion is organization-wide, so a different-model slot would search a
+    different vector space and silently find nothing: reject it explicitly."""
+    async with test_client_factory(world["user"]) as client:
+        key = await _cred(client)
+        path = f"/api/v1/workflow/{world['wf1'].id}/model-slots/embeddings"
+        cred = {"credential_ref": key["credential_ref"]}
+        await client.put(
+            f"{path}/draft",
+            json={
+                "expected_revision": 0,
+                "config": {"provider": "openai", "model": "text-embedding-3-large"},
+                "credential": cred,
+            },
+        )
+        invalid = await client.post(f"{path}/draft/1/validate")
+        blocked = await client.post(
+            f"{path}/publish", json={"version": 1, "expected_revision": 1}
+        )
+        await client.put(
+            f"{path}/draft",
+            json={
+                "expected_revision": 1,
+                "config": {"provider": "openai", "model": "text-embedding-3-small"},
+                "credential": cred,
+            },
+        )
+        valid = await client.post(f"{path}/draft/2/validate")
+    assert invalid.json()["status"] == "invalid"
+    assert "organization's embeddings model" in invalid.json()["errors"][0]
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "embedding_model_not_organization_index"
+    assert valid.json()["status"] == "valid"  # same model, own credential: fine
+
+
 async def test_zero_results_from_a_model_mismatch_is_an_error_not_an_empty_list(
     world, db_session, async_session
 ):
@@ -976,7 +1049,7 @@ async def test_embedding_signatures_are_scoped_to_the_organization(
 
 
 # ------------------------------------------------- speech cut-over and recovery
-GEMINI_PROJECT = "project-943ab014-8a47-48e4-a92"
+GEMINI_PROJECT = "example-project-123456"
 GEMINI_STT = {
     "provider": "google_vertex",
     "model": "gemini-3.5-transcribe-live-preview",
@@ -1056,3 +1129,151 @@ async def test_first_publish_without_a_frozen_v1_has_nothing_to_roll_back_to(
             json={"to_version": 1, "expected_revision": 2},
         )
     assert rolled.status_code == 409  # v1 is the live Gemini config itself
+
+
+# ------------------------------------------- readback: one resolver, per-slot errors
+FIXTURES = Path(__file__).parent / "fixtures" / "avsiq"
+
+
+def _avsiq_validator():
+    schema = json.loads((FIXTURES / "workflow_slots.schema.json").read_text())
+    return jsonschema.Draft202012Validator(schema)
+
+
+async def _published_llm(client, world):
+    cred = await _cred(client)
+    await _publish(client, world["wf1"], "llm", LLM_CFG, cred, 0)
+    return cred
+
+
+@pytest.mark.parametrize("version", ["published", "draft"])
+async def test_effective_readback_applies_published_slots_for_published_and_draft(
+    test_client_factory, world, fake_validator, org_default, db_session, version
+):
+    """Draft runs resolve published slots (run_pipeline), so the draft readback must too."""
+    await db_session.save_workflow_draft(world["wf1"].id, workflow_configurations={})
+    async with test_client_factory(world["user"]) as client:
+        await _published_llm(client, world)
+        resp = await client.get(
+            f"/api/v1/workflow/{world['wf1'].id}/effective-model-configuration",
+            params={"version": version},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["llm"]["model"] == "gpt-4.1-mini"  # the slot, not the org default
+    assert body["stt"]["provider"] == "deepgram"  # untouched slots still inherit
+    assert OPENAI_SECRET not in resp.text
+    # The very configuration a draft run builds is the one that was described.
+    run = await aimc.get_effective_ai_model_configuration_for_workflow(
+        organization_id=world["org"].id,
+        workflow_configurations={},
+        workflow_id=world["wf1"].id,
+    )
+    assert run.llm.model == body["llm"]["model"]
+
+
+async def test_readback_reports_unresolvable_slot_with_source_and_sanitized_error(
+    test_client_factory, world, fake_validator, org_default, async_session
+):
+    async with test_client_factory(world["user"]) as client:
+        cred = await _published_llm(client, world)
+        await _force_revoke(async_session, cred["credential_ref"])
+        readback = await _read(client, world["wf1"])
+        effective = await client.get(
+            f"/api/v1/workflow/{world['wf1'].id}/effective-model-configuration"
+        )
+    llm = _slot(readback, "llm")
+    assert llm["source"] == "workflow_slot"  # not "unconfigured"
+    assert llm["published_version"] == 1
+    assert llm["effective"]["error_code"] == "credential_revoked"
+    assert "is revoked" in llm["effective"]["error"]
+    assert (llm["effective"]["provider"], llm["effective"]["model"]) == (
+        "openai",
+        "gpt-4.1-mini",
+    )
+    assert OPENAI_SECRET not in json.dumps(readback)
+    # Other slots keep reading normally.
+    assert _slot(readback, "stt")["effective"]["provider"] == "deepgram"
+    assert _slot(readback, "stt")["source"] == "organization_default_inherited"
+    # The workflow-level endpoint reports the same error instead of a 500.
+    assert effective.status_code == 200
+    assert effective.json()["llm"]["error_code"] == "credential_revoked"
+    assert effective.json()["stt"]["provider"] == "deepgram"
+    # Runtime stays fail-closed and says the same thing.
+    with pytest.raises(slot_settings.SlotResolutionError, match="is revoked") as err:
+        await aimc.get_effective_ai_model_configuration_for_workflow(
+            organization_id=world["org"].id,
+            workflow_configurations={},
+            workflow_id=world["wf1"].id,
+        )
+    assert err.value.code == "credential_revoked"
+    _avsiq_validator().validate(readback)
+
+
+async def test_readback_for_missing_encryption_key_is_per_slot_and_secret_free(
+    test_client_factory, world, fake_validator, org_default, monkeypatch
+):
+    async with test_client_factory(world["user"]) as client:
+        await _published_llm(client, world)
+        monkeypatch.delenv(secret_store.KEYS_ENV)
+        readback = await _read(client, world["wf1"])
+    llm = _slot(readback, "llm")
+    assert llm["source"] == "workflow_slot"
+    assert llm["effective"]["error_code"] == "secret_store_unavailable"
+    assert OPENAI_SECRET not in json.dumps(readback)
+
+
+async def test_pending_template_reports_every_slot_with_its_source(
+    test_client_factory, world, org_default, db_session
+):
+    await db_session.set_workflow_slot_template_status(world["wf1"].id, "pending")
+    async with test_client_factory(world["user"]) as client:
+        readback = await _read(client, world["wf1"])
+    assert readback["template_status"] == "pending"
+    for slot in ("llm", "stt", "tts", "embeddings"):
+        item = _slot(readback, slot)
+        assert item["effective"]["error_code"] == "template_pending"
+        assert (
+            item["source"] == "organization_default_inherited"
+        )  # never "unconfigured"
+    assert _slot(readback, "llm")["effective"]["provider"] == "openai"
+    _avsiq_validator().validate(readback)
+
+
+async def test_unconfigured_slot_is_still_reported_as_unconfigured(
+    test_client_factory, world, db_session, monkeypatch
+):
+    async def empty(**_):
+        return EffectiveAIModelConfiguration()
+
+    monkeypatch.setattr(aimc, "_base_effective_configuration", empty)
+    async with test_client_factory(world["user"]) as client:
+        readback = await _read(client, world["wf1"])
+    assert _slot(readback, "llm")["source"] == "unconfigured"
+    assert _slot(readback, "llm")["effective"] is None
+
+
+async def test_readback_matches_avsiq_contract_schema(
+    test_client_factory, world, fake_validator, org_default
+):
+    async with test_client_factory(world["user"]) as client:
+        await _published_llm(client, world)
+        readback = await _read(client, world["wf1"])
+        group = await client.get(
+            "/api/v1/model-slots", params={"workflow_ids": f"{world['wf1'].id}"}
+        )
+    validator = _avsiq_validator()
+    validator.validate(readback)
+    for item in group.json()["workflows"]:
+        validator.validate(item)
+
+
+@pytest.mark.parametrize(
+    "name", ["readback_published_slot_unresolvable", "readback_template_pending"]
+)
+def test_avsiq_error_fixtures_are_valid_and_expose_effective_error(name):
+    fixture = json.loads((FIXTURES / f"{name}.json").read_text())
+    _avsiq_validator().validate(fixture)
+    errors = [s["effective"] for s in fixture["slots"] if s["effective"].get("error")]
+    assert errors and all(e.get("error_code") for e in errors)
+    assert all(s["source"] != "unconfigured" for s in fixture["slots"])

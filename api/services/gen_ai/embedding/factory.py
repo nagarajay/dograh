@@ -65,7 +65,7 @@ async def build_embedding_service(
     api_version: Optional[str] = None,
     correlation_id: Optional[str] = None,
     resolve_correlation: bool = False,
-    organization_id: Optional[int] = None,
+    embeddings_config=None,
 ) -> BaseEmbeddingService:
     """Construct the right embedding service for a provider/config.
 
@@ -75,6 +75,10 @@ async def build_embedding_service(
         resolve_correlation: When True and no ``correlation_id`` is supplied, resolve
             one for the Dograh provider via ``resolve_embedding_correlation_id``
             (for calls made outside a workflow run: ingestion, manual search).
+        embeddings_config: The effective embeddings service configuration the
+            caller resolved. Google Vertex takes *every* field (model, project,
+            location, credentials, key) from it, so a workflow slot's model and
+            credential are never combined with another configuration's project.
     """
     from api.services.configuration.registry import ServiceProviders
 
@@ -90,28 +94,25 @@ async def build_embedding_service(
         )
 
     if provider == ServiceProviders.GOOGLE_VERTEX.value:
-        # Project, location and service-account JSON are not part of the
-        # shared (provider, api_key, model) signature, so read them from the
-        # organization's own embeddings configuration.
-        if organization_id is None:
-            raise ValueError("organization_id is required for Google Vertex embeddings")
-        from api.services.configuration.ai_model_configuration import (
-            get_resolved_ai_model_configuration,
-        )
-
-        resolved = await get_resolved_ai_model_configuration(
-            organization_id=organization_id
-        )
-        config = resolved.effective.embeddings
-        if config is None or config.provider != ServiceProviders.GOOGLE_VERTEX.value:
-            raise ValueError("Google Vertex embeddings are not configured")
+        if (
+            embeddings_config is None
+            or getattr(embeddings_config, "provider", None) != provider
+        ):
+            raise ValueError(
+                "Google Vertex embeddings need the effective Vertex embeddings "
+                "configuration; refusing to assemble one from separate sources"
+            )
+        if model and model != embeddings_config.model:
+            raise ValueError(
+                "embedding model does not match the effective embeddings configuration"
+            )
         return GoogleVertexEmbeddingService(
             db_client=db_client,
-            model_id=model_id,
-            project_id=config.project_id,
-            location=config.location,
-            credentials=config.credentials,
-            api_key=api_key,
+            model_id=embeddings_config.model,
+            project_id=embeddings_config.project_id,
+            location=embeddings_config.location,
+            credentials=embeddings_config.credentials,
+            api_key=embeddings_config.api_key,
         )
 
     if provider == ServiceProviders.DOGRAH.value:

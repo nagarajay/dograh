@@ -34,7 +34,27 @@ class SlotStateError(Exception):
     """The requested transition is not valid from the slot's current state."""
 
 
+class CredentialRevokedError(SlotStateError):
+    """The credential version a slot would pin is revoked."""
+
+
+class CredentialInUseError(Exception):
+    """A published slot still pins the credential version being revoked."""
+
+    def __init__(self, in_use: int):
+        super().__init__(f"{in_use} published slot(s) still use this credential")
+        self.in_use = in_use
+
+
 class WorkflowSlotClient(BaseDBClient):
+    """Lock order, everywhere: provider credential rows first, then slot state.
+
+    Publishing, rolling back and seeding take a *shared* lock on the credential
+    version a slot pins; revoking takes the *exclusive* lock and counts usages
+    while holding it. So a publication cannot commit against a revoked
+    credential, and a revocation cannot commit while that version is published.
+    """
+
     # ---- slot reads -------------------------------------------------------
 
     async def get_slot_state(
@@ -134,6 +154,46 @@ class WorkflowSlotClient(BaseDBClient):
         if state.revision != expected:
             raise SlotRevisionConflict(state.revision)
 
+    @staticmethod
+    async def _lock_credentials_shared(
+        session, organization_id: int, pins: list[tuple[str, int]]
+    ) -> None:
+        """Share-lock the pinned credential versions; refuse a revoked one.
+
+        Locks are taken in sorted order so concurrent multi-slot writers cannot
+        deadlock each other. Must run before any slot-state lock.
+        """
+        for ref, version in sorted(set(pins)):
+            row = (
+                (
+                    await session.execute(
+                        select(ProviderCredentialModel)
+                        .where(
+                            ProviderCredentialModel.organization_id == organization_id,
+                            ProviderCredentialModel.credential_ref == ref,
+                            ProviderCredentialModel.version == version,
+                        )
+                        .with_for_update(read=True)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                raise SlotStateError("credential version not found")
+            if row.revoked_at is not None:
+                raise CredentialRevokedError("credential version is revoked")
+
+    @staticmethod
+    async def _workflow_organization(session, workflow_id: int) -> int:
+        return (
+            await session.execute(
+                select(WorkflowModel.organization_id).where(
+                    WorkflowModel.id == workflow_id
+                )
+            )
+        ).scalar_one()
+
     async def save_slot_draft(
         self,
         *,
@@ -210,6 +270,27 @@ class WorkflowSlotClient(BaseDBClient):
         self, *, workflow_id: int, slot: str, version: int, expected_revision: int
     ) -> WorkflowSlotSettingModel:
         async with self.async_session() as session:
+            # Credential lock before the state lock (see the class docstring).
+            # A draft version's pinned credential never changes, so reading it
+            # unlocked to learn which credential to lock is safe.
+            pinned = (
+                await session.execute(
+                    select(
+                        WorkflowSlotSettingModel.credential_ref,
+                        WorkflowSlotSettingModel.credential_version,
+                    ).where(
+                        WorkflowSlotSettingModel.workflow_id == workflow_id,
+                        WorkflowSlotSettingModel.slot == slot,
+                        WorkflowSlotSettingModel.version == version,
+                    )
+                )
+            ).first()
+            if pinned is not None and pinned.credential_ref is not None:
+                await self._lock_credentials_shared(
+                    session,
+                    await self._workflow_organization(session, workflow_id),
+                    [(pinned.credential_ref, pinned.credential_version)],
+                )
             state = await self._lock_state(session, workflow_id, slot)
             self._check_revision(state, expected_revision)
             if state.draft_version != version:
@@ -253,6 +334,24 @@ class WorkflowSlotClient(BaseDBClient):
     ) -> WorkflowSlotSettingModel:
         """Republish an earlier published version as a new version (linear history)."""
         async with self.async_session() as session:
+            pinned = (
+                await session.execute(
+                    select(
+                        WorkflowSlotSettingModel.credential_ref,
+                        WorkflowSlotSettingModel.credential_version,
+                    ).where(
+                        WorkflowSlotSettingModel.workflow_id == workflow_id,
+                        WorkflowSlotSettingModel.slot == slot,
+                        WorkflowSlotSettingModel.version == to_version,
+                    )
+                )
+            ).first()
+            if pinned is not None and pinned.credential_ref is not None:
+                await self._lock_credentials_shared(
+                    session,
+                    await self._workflow_organization(session, workflow_id),
+                    [(pinned.credential_ref, pinned.credential_version)],
+                )
             state = await self._lock_state(session, workflow_id, slot)
             self._check_revision(state, expected_revision)
             if state.published_version == to_version:
@@ -320,6 +419,17 @@ class WorkflowSlotClient(BaseDBClient):
         """
         seeded: list[str] = []
         async with self.async_session() as session:
+            pins = [
+                (d["credential_ref"], d["credential_version"])
+                for d in slots.values()
+                if d.get("credential_ref")
+            ]
+            if pins:
+                await self._lock_credentials_shared(
+                    session,
+                    await self._workflow_organization(session, workflow_id),
+                    pins,
+                )
             for slot, data in slots.items():
                 state = await self._lock_state(session, workflow_id, slot)
                 if state.last_version != 0:
@@ -476,6 +586,13 @@ class WorkflowSlotClient(BaseDBClient):
     async def revoke_provider_credential_version(
         self, organization_id: int, credential_ref: str, version: int
     ) -> Optional[ProviderCredentialModel]:
+        """Revoke a version unless a published slot pins it.
+
+        The exclusive credential lock is held while usages are counted, so a
+        concurrent publish (holding the shared lock) either commits first and is
+        seen here, or waits and then sees the revocation and refuses.
+        Revoking an already-revoked version is a no-op.
+        """
         async with self.async_session() as session:
             result = await session.execute(
                 select(ProviderCredentialModel)
@@ -490,6 +607,14 @@ class WorkflowSlotClient(BaseDBClient):
             if row is None:
                 return None
             if row.revoked_at is None:
+                in_use = await self._count_usages(
+                    session,
+                    organization_id=organization_id,
+                    credential_ref=credential_ref,
+                    version=version,
+                )
+                if in_use:
+                    raise CredentialInUseError(in_use)
                 row.revoked_at = datetime.now(UTC)
             await session.commit()
             await session.refresh(row)
@@ -500,29 +625,40 @@ class WorkflowSlotClient(BaseDBClient):
     ) -> int:
         """Published slots (of this org's workflows) pinned to a credential version."""
         async with self.async_session() as session:
-            result = await session.execute(
-                select(func.count())
-                .select_from(WorkflowSlotSettingModel)
-                .join(
-                    WorkflowSlotStateModel,
-                    (
-                        WorkflowSlotStateModel.workflow_id
-                        == WorkflowSlotSettingModel.workflow_id
-                    )
-                    & (WorkflowSlotStateModel.slot == WorkflowSlotSettingModel.slot)
-                    & (
-                        WorkflowSlotStateModel.published_version
-                        == WorkflowSlotSettingModel.version
-                    ),
-                )
-                .join(
-                    WorkflowModel,
-                    WorkflowModel.id == WorkflowSlotSettingModel.workflow_id,
-                )
-                .where(
-                    WorkflowModel.organization_id == organization_id,
-                    WorkflowSlotSettingModel.credential_ref == credential_ref,
-                    WorkflowSlotSettingModel.credential_version == version,
-                )
+            return await self._count_usages(
+                session,
+                organization_id=organization_id,
+                credential_ref=credential_ref,
+                version=version,
             )
-            return int(result.scalar() or 0)
+
+    @staticmethod
+    async def _count_usages(
+        session, *, organization_id: int, credential_ref: str, version: int
+    ) -> int:
+        result = await session.execute(
+            select(func.count())
+            .select_from(WorkflowSlotSettingModel)
+            .join(
+                WorkflowSlotStateModel,
+                (
+                    WorkflowSlotStateModel.workflow_id
+                    == WorkflowSlotSettingModel.workflow_id
+                )
+                & (WorkflowSlotStateModel.slot == WorkflowSlotSettingModel.slot)
+                & (
+                    WorkflowSlotStateModel.published_version
+                    == WorkflowSlotSettingModel.version
+                ),
+            )
+            .join(
+                WorkflowModel,
+                WorkflowModel.id == WorkflowSlotSettingModel.workflow_id,
+            )
+            .where(
+                WorkflowModel.organization_id == organization_id,
+                WorkflowSlotSettingModel.credential_ref == credential_ref,
+                WorkflowSlotSettingModel.credential_version == version,
+            )
+        )
+        return int(result.scalar() or 0)

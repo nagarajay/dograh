@@ -326,34 +326,102 @@ async def test_embeddings_search_scopes_by_org_and_model():
 
 
 @pytest.mark.asyncio
-async def test_factory_builds_vertex_embeddings_from_org_config(monkeypatch):
+async def test_factory_builds_vertex_embeddings_from_one_effective_config(monkeypatch):
+    """Every Vertex field comes from the single config the caller resolved."""
     from api.services.gen_ai.embedding import factory
 
-    cfg = GoogleVertexEmbeddingsConfiguration(
-        project_id="proj-1", location="us-central1", credentials=SA
+    slot_cfg = GoogleVertexEmbeddingsConfiguration(
+        project_id="slot-project",
+        location="us-central1",
+        credentials=SA,
+        api_key=None,
     )
-    resolved = SimpleNamespace(effective=SimpleNamespace(embeddings=cfg))
-    seen = {}
 
-    async def fake_resolve(*, organization_id):
-        seen["org"] = organization_id
-        return resolved
+    async def must_not_be_called(**_):  # the old second lookup of the org config
+        raise AssertionError("factory must not re-resolve the organization config")
 
     monkeypatch.setattr(
         "api.services.configuration.ai_model_configuration."
         "get_resolved_ai_model_configuration",
-        fake_resolve,
+        must_not_be_called,
     )
     service = await factory.build_embedding_service(
         db_client=MagicMock(),
         provider="google_vertex",
         api_key=None,
         model="gemini-embedding-001",
-        organization_id=42,
+        embeddings_config=slot_cfg,
     )
     assert isinstance(service, GoogleVertexEmbeddingService)
-    assert seen["org"] == 42
-    assert service._location == "us-central1" and service._project_id == "proj-1"
+    assert service._location == "us-central1" and service._project_id == "slot-project"
+    assert service._credentials == SA and service.get_model_id() == slot_cfg.model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,config,model",
+    [
+        ("google_vertex", None, "gemini-embedding-001"),  # no coherent config
+        ("google_vertex", SimpleNamespace(provider="openai", model="x"), None),
+        (
+            "google_vertex",
+            GoogleVertexEmbeddingsConfiguration(project_id="p", credentials=SA),
+            "some-other-model",  # model from one place, config from another
+        ),
+    ],
+)
+async def test_factory_refuses_to_assemble_vertex_embeddings_from_mixed_sources(
+    provider, config, model
+):
+    from api.services.gen_ai.embedding import factory
+
+    with pytest.raises(ValueError):
+        await factory.build_embedding_service(
+            db_client=MagicMock(),
+            provider=provider,
+            api_key="k",
+            model=model,
+            embeddings_config=config,
+        )
+
+
+@pytest.mark.asyncio
+async def test_runtime_retrieval_uses_the_slot_config_not_the_organization_project(
+    monkeypatch,
+):
+    """A Vertex slot on a workflow whose organization is on another provider/project."""
+    from api.services.workflow.tools import knowledge_base as tool
+
+    slot_cfg = GoogleVertexEmbeddingsConfiguration(
+        project_id="slot-project", location="us-central1", credentials=SA
+    )
+    seen = {}
+
+    async def fake_search(self, **kwargs):
+        seen.update(
+            project=self._project_id, location=self._location, key=self._api_key
+        )
+        return []
+
+    monkeypatch.setattr(
+        GoogleVertexEmbeddingService, "search_similar_chunks", fake_search
+    )
+    result = await tool._perform_retrieval(
+        "q",
+        7,
+        None,
+        3,
+        None,
+        slot_cfg.model,
+        None,
+        "google_vertex",
+        None,
+        None,
+        None,
+        embeddings_config=slot_cfg,
+    )
+    assert result["total_results"] == 0
+    assert seen == {"project": "slot-project", "location": "us-central1", "key": None}
 
 
 # ---------------------------------------------------------------- readback
@@ -369,8 +437,13 @@ async def test_readback_describes_vertex_slots_without_secrets(monkeypatch):
     async def fake(**_):
         return effective
 
+    async def resolved(**kwargs):
+        return await fake(**kwargs), {}
+
     monkeypatch.setattr(
-        effective_readback, "get_effective_ai_model_configuration_for_workflow", fake
+        effective_readback,
+        "resolve_effective_ai_model_configuration_for_workflow",
+        resolved,
     )
     out = await effective_readback.build_effective_model_configuration_readback(
         organization_id=1, workflow_configurations={}

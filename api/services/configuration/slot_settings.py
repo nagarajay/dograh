@@ -17,7 +17,12 @@ from typing import Any, Optional
 
 from pydantic import ValidationError
 
-from api.db.workflow_slot_client import SlotRevisionConflict, SlotStateError
+from api.db.workflow_slot_client import (
+    CredentialInUseError,
+    CredentialRevokedError,
+    SlotRevisionConflict,
+    SlotStateError,
+)
 from api.services.configuration import secret_store
 from api.services.configuration.masking import SERVICE_SECRET_FIELDS
 from api.services.configuration.options.google_vertex_catalog import (
@@ -64,7 +69,24 @@ class SlotResolutionError(RuntimeError):
     """A published slot cannot be turned into a usable service configuration.
 
     Runtime must fail the call rather than fall back to another provider.
+    ``code`` is a stable machine-readable reason; the message never carries
+    secret material.
     """
+
+    def __init__(self, message: str, code: str = "slot_resolution_failed"):
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass
+class SlotIssue:
+    """Why one slot of a workflow cannot be resolved, for readback and runtime."""
+
+    slot: str
+    code: str
+    message: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
 def _config_class(slot: str, provider: str):
@@ -203,7 +225,8 @@ def build_service_config(
     except ValidationError as exc:
         # Never str(exc): its input_value repr would carry the secret.
         raise SlotResolutionError(
-            f"slot configuration is invalid: {validation_error_text(exc)}"
+            f"slot configuration is invalid: {validation_error_text(exc)}",
+            "slot_config_invalid",
         ) from None
 
 
@@ -229,9 +252,13 @@ async def resolve_credential_secret(
         return None, None
     row = await repo.get_provider_credential(organization_id, ref, version or 0)
     if row is None:
-        raise SlotResolutionError(f"credential {ref} v{version} not found")
+        raise SlotResolutionError(
+            f"credential {ref} v{version} not found", "credential_not_found"
+        )
     if row.revoked_at is not None:
-        raise SlotResolutionError(f"credential {ref} v{version} is revoked")
+        raise SlotResolutionError(
+            f"credential {ref} v{version} is revoked", "credential_revoked"
+        )
     payload = secret_store.decrypt_credential(
         organization_id=organization_id,
         credential_ref=ref,
@@ -241,39 +268,66 @@ async def resolve_credential_secret(
     return row.kind, payload
 
 
+async def load_published_overlay_with_issues(
+    *, repo, workflow_id: int, organization_id: int
+) -> tuple[dict[str, ResolvedSlot], dict[str, SlotIssue]]:
+    """Resolve every published slot, collecting a per-slot issue for each failure.
+
+    ``issues`` is keyed by slot. A workflow whose organization-default template
+    copy is still pending has an issue on *every* slot: it must not run on
+    inherited defaults. Runtime treats any issue as fatal (see
+    ``load_published_overlay``); readback reports them per slot.
+    """
+    if await repo.get_workflow_slot_template_status(workflow_id) == TEMPLATE_PENDING:
+        message = (
+            f"workflow {workflow_id}: model configuration template has not been "
+            "applied; POST /workflow/{id}/model-slots/apply-template to retry"
+        )
+        return {}, {
+            slot: SlotIssue(slot, "template_pending", message) for slot in SLOTS
+        }
+    overlay: dict[str, ResolvedSlot] = {}
+    issues: dict[str, SlotIssue] = {}
+    for row in await repo.list_published_slot_settings(workflow_id):
+        config = dict(row.config)
+        try:
+            _, secret = await resolve_credential_secret(
+                repo, organization_id, row.credential_ref, row.credential_version
+            )
+            service = build_service_config(row.slot, config, secret)
+        except secret_store.SecretStoreUnavailable as exc:
+            code, reason = "secret_store_unavailable", str(exc)
+        except secret_store.SecretStoreCorrupt as exc:
+            code, reason = "secret_store_corrupt", str(exc)
+        except SlotResolutionError as exc:
+            code, reason = exc.code, str(exc)
+        else:
+            overlay[row.slot] = ResolvedSlot(row.slot, row.version, service)
+            continue
+        issues[row.slot] = SlotIssue(
+            row.slot,
+            code,
+            f"{row.slot} slot v{row.version} of workflow {workflow_id}: {reason}",
+            provider=config.get("provider"),
+            model=config.get("model"),
+        )
+    return overlay, issues
+
+
 async def load_published_overlay(
     *, repo, workflow_id: int, organization_id: int
 ) -> dict[str, ResolvedSlot]:
     """Service configs for the workflow's published slots. Empty for legacy workflows.
 
-    A workflow whose organization-default template copy is still pending raises:
-    it must not run on inherited defaults.
+    Raises on the first unresolvable slot (runtime fails the call; it never
+    falls back to another provider) and while the template copy is pending.
     """
-    if await repo.get_workflow_slot_template_status(workflow_id) == TEMPLATE_PENDING:
-        raise SlotResolutionError(
-            f"workflow {workflow_id}: model configuration template has not been "
-            "applied; POST /workflow/{id}/model-slots/apply-template to retry"
-        )
-    rows = await repo.list_published_slot_settings(workflow_id)
-    overlay: dict[str, ResolvedSlot] = {}
-    for row in rows:
-        try:
-            _, secret = await resolve_credential_secret(
-                repo, organization_id, row.credential_ref, row.credential_version
-            )
-            service = build_service_config(row.slot, dict(row.config), secret)
-        except (
-            secret_store.SecretStoreUnavailable,
-            secret_store.SecretStoreCorrupt,
-        ) as exc:
-            raise SlotResolutionError(
-                f"{row.slot} slot v{row.version} of workflow {workflow_id}: {exc}"
-            ) from None
-        except SlotResolutionError as exc:
-            raise SlotResolutionError(
-                f"{row.slot} slot v{row.version} of workflow {workflow_id}: {exc}"
-            ) from None
-        overlay[row.slot] = ResolvedSlot(row.slot, row.version, service)
+    overlay, issues = await load_published_overlay_with_issues(
+        repo=repo, workflow_id=workflow_id, organization_id=organization_id
+    )
+    for slot in SLOTS:
+        if slot in issues:
+            raise SlotResolutionError(issues[slot].message, issues[slot].code)
     return overlay
 
 
@@ -303,6 +357,7 @@ async def check_embedding_compatibility(
             f"the knowledge-base index stores {EMBEDDING_INDEX_DIMENSION}-dimensional "
             f"vectors; model '{config.get('model')}' does not produce that size",
         )
+    await _check_matches_organization_index_model(organization_id, config, dimension)
     signatures = await repo.get_organization_embedding_signatures(organization_id)
     conflicting = [
         s
@@ -326,6 +381,39 @@ async def check_embedding_compatibility(
                 }
                 for s in signatures
             ],
+        )
+
+
+async def _check_matches_organization_index_model(
+    organization_id: int, config: dict[str, Any], dimension: Optional[int]
+) -> None:
+    """A workflow's embeddings slot must use the organization's index model.
+
+    Ingestion and the knowledge-base index are organization-wide and always use
+    the organization's embeddings configuration; only retrieval runs inside a
+    workflow. A slot whose model differs would query a different vector space
+    than the one documents are written to and return nothing, so it is rejected
+    here instead of being accepted and silently not working. (Project, location
+    and credential may differ: the same model produces the same vectors.)
+    """
+    from api.services.configuration.ai_model_configuration import (
+        get_resolved_ai_model_configuration,
+    )
+
+    org = (
+        await get_resolved_ai_model_configuration(organization_id=organization_id)
+    ).effective.embeddings
+    org_model = getattr(org, "model", None)
+    if org_model and config.get("model") and org_model != config.get("model"):
+        raise SlotSettingsError(
+            409,
+            "embedding_model_not_organization_index",
+            f"documents are indexed with the organization's embeddings model "
+            f"'{org_model}' (ingestion is organization-wide); a workflow slot "
+            f"using '{config.get('model')}' would search a different vector space "
+            "and find nothing. Use the organization's model, or change the "
+            "organization's embeddings configuration and re-ingest.",
+            organization_model=org_model,
         )
 
 
@@ -455,21 +543,17 @@ class WorkflowSlotService:
     async def revoke_credential(
         self, *, organization_id: int, credential_ref: str, version: int
     ):
-        in_use = await self.repo.count_slot_usages_of_credential(
-            organization_id=organization_id,
-            credential_ref=credential_ref,
-            version=version,
-        )
-        if in_use:
+        try:
+            row = await self.repo.revoke_provider_credential_version(
+                organization_id, credential_ref, version
+            )
+        except CredentialInUseError as exc:
             raise SlotSettingsError(
                 409,
                 "credential_in_use",
-                f"{in_use} published slot(s) still use this credential version; "
+                f"{exc.in_use} published slot(s) still use this credential version; "
                 "publish a replacement first",
-            )
-        row = await self.repo.revoke_provider_credential_version(
-            organization_id, credential_ref, version
-        )
+            ) from None
         if row is None:
             raise SlotSettingsError(404, "credential_not_found", "credential not found")
         return row
@@ -597,8 +681,16 @@ class WorkflowSlotService:
             )
         except SlotRevisionConflict as exc:
             raise self._conflict(exc) from None
+        except CredentialRevokedError:
+            raise self._revoked() from None
         except SlotStateError as exc:
             raise SlotSettingsError(409, "invalid_transition", str(exc)) from None
+
+    @staticmethod
+    def _revoked() -> SlotSettingsError:
+        return SlotSettingsError(
+            422, "credential_revoked", "credential version is revoked"
+        )
 
     async def rollback(
         self,
@@ -627,6 +719,8 @@ class WorkflowSlotService:
             )
         except SlotRevisionConflict as exc:
             raise self._conflict(exc) from None
+        except CredentialRevokedError:
+            raise self._revoked() from None
         except SlotStateError as exc:
             raise SlotSettingsError(409, "invalid_transition", str(exc)) from None
 
@@ -698,7 +792,7 @@ class WorkflowSlotService:
                             state.published_version if state else None,
                             released_configs,
                         )
-                    ),
+                    ),  # a slot with an ``effective.error`` keeps its real source
                     "published_version": state.published_version if state else None,
                     "draft_version": state.draft_version if state else None,
                     "published": published,
@@ -790,33 +884,60 @@ class WorkflowSlotService:
             if item["slot"] not in touched
         ]
         slots: dict[str, dict[str, Any]] = {}
-        for item in plan:
-            if item["blocked"]:
-                raise SlotSettingsError(
-                    422, "snapshot_blocked", f"{item['slot']}: {item['blocked']}"
-                )
-            normalized = normalize_slot_config(item["slot"], item["config"])
-            check_credential_compatibility(item["slot"], normalized, item["kind"])
-            ref = version = None
-            if item["kind"]:
-                cred = await self.create_credential(
-                    organization_id=organization_id,
-                    kind=item["kind"],
-                    secret=item["secret"],
-                    credential_ref=None,
-                    label=f"{origin} snapshot: workflow {workflow_id} {item['slot']}",
-                    source_ref=None,
-                    created_by=created_by,
-                )
-                ref, version = cred.credential_ref, cred.version
-            slots[item["slot"]] = {
-                "config": normalized,
-                "credential_ref": ref,
-                "credential_version": version,
-            }
-        return await self.repo.seed_published_slots(
-            workflow_id=workflow_id, slots=slots, origin=origin, created_by=created_by
+        created: dict[str, Any] = {}  # slot -> credential row made for this seed
+        try:
+            for item in plan:
+                if item["blocked"]:
+                    raise SlotSettingsError(
+                        422, "snapshot_blocked", f"{item['slot']}: {item['blocked']}"
+                    )
+                normalized = normalize_slot_config(item["slot"], item["config"])
+                check_credential_compatibility(item["slot"], normalized, item["kind"])
+                ref = version = None
+                if item["kind"]:
+                    cred = await self.create_credential(
+                        organization_id=organization_id,
+                        kind=item["kind"],
+                        secret=item["secret"],
+                        credential_ref=None,
+                        label=f"{origin} snapshot: workflow {workflow_id} {item['slot']}",
+                        source_ref=None,
+                        created_by=created_by,
+                    )
+                    created[item["slot"]] = cred
+                    ref, version = cred.credential_ref, cred.version
+                slots[item["slot"]] = {
+                    "config": normalized,
+                    "credential_ref": ref,
+                    "credential_version": version,
+                }
+            seeded = await self.repo.seed_published_slots(
+                workflow_id=workflow_id,
+                slots=slots,
+                origin=origin,
+                created_by=created_by,
+            )
+        except Exception:
+            await self._discard_unused_credentials(organization_id, created.values())
+            raise
+        # A slot that gained history between planning and seeding was skipped;
+        # its freshly made copy of the secret is unreferenced.
+        await self._discard_unused_credentials(
+            organization_id, [c for slot, c in created.items() if slot not in seeded]
         )
+        return seeded
+
+    async def _discard_unused_credentials(self, organization_id: int, creds) -> None:
+        """Revoke credential copies no slot pins, so a failed or repeated template
+        copy does not leave encrypted duplicates of the organization's keys behind.
+        Best effort: it never masks the error being handled."""
+        for cred in list(creds):
+            try:
+                await self.repo.revoke_provider_credential_version(
+                    organization_id, cred.credential_ref, cred.version
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def apply_organization_template(

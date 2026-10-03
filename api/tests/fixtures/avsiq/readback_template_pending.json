@@ -1,0 +1,12 @@
+{
+  "workflow_id": 8,
+  "workflow_uuid": "00000000-0000-0000-0000-000000000008",
+  "template_status": "pending",
+  "slots": [
+    {
+      "slot": "llm", "revision": 0, "source": "organization_default_inherited",
+      "published_version": null, "draft_version": null, "published": null, "draft": null,
+      "effective": {"provider": "openai", "model": "gpt-4.1", "error": "workflow 8: model configuration template has not been applied; POST /workflow/{id}/model-slots/apply-template to retry", "error_code": "template_pending"}
+    }
+  ]
+}

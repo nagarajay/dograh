@@ -2,8 +2,13 @@
 
 Keys come from ``PROVIDER_CREDENTIAL_ENCRYPTION_KEYS``: a comma-separated list of
 Fernet keys. The first encrypts; every key can decrypt, so a key rotation is
-"prepend new key, re-encrypt, drop old key". If no valid key is configured,
-every operation raises ``SecretStoreUnavailable``; there is no plaintext fallback.
+"prepend new key, re-encrypt, drop old key". ``reencrypt`` is the library step
+for the middle part; there is no bulk command that applies it to every stored
+credential yet, so until one exists every old key must stay configured (dropping
+one makes the credentials encrypted under it unreadable, and slots that pin them
+fail closed). ``key_id`` on a credential row records which key encrypted it. If
+no valid key is configured, every operation raises ``SecretStoreUnavailable``;
+there is no plaintext fallback.
 
 Generate a key with:
     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

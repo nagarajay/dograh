@@ -1,5 +1,6 @@
 from typing import (
     TYPE_CHECKING,
+    Any,
     Awaitable,
     Callable,
     Iterable,
@@ -130,6 +131,7 @@ class PipecatEngine:
         embeddings_provider: Optional[str] = None,
         embeddings_endpoint: Optional[str] = None,
         embeddings_api_version: Optional[str] = None,
+        embeddings_config: Any = None,
         has_recordings: bool = False,
         is_realtime: bool = False,
         context_compaction_enabled: bool = False,
@@ -265,6 +267,10 @@ class PipecatEngine:
         self._embeddings_provider: Optional[str] = embeddings_provider
         self._embeddings_endpoint: Optional[str] = embeddings_endpoint
         self._embeddings_api_version: Optional[str] = embeddings_api_version
+        # The whole effective embeddings config; provider-specific fields are
+        # read from it so they always belong to the same configuration as the
+        # model and credential above.
+        self._embeddings_config: Any = embeddings_config
 
         # Audio configuration (set via set_audio_config from _run_pipeline)
         self._audio_config = None
@@ -661,6 +667,7 @@ class PipecatEngine:
                     embeddings_provider=self._embeddings_provider,
                     embeddings_endpoint=self._embeddings_endpoint,
                     embeddings_api_version=self._embeddings_api_version,
+                    embeddings_config=self._embeddings_config,
                     correlation_id=self._call_context_vars.get(
                         MPS_CORRELATION_ID_CONTEXT_KEY
                     ),

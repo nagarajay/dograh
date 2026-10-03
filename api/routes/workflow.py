@@ -870,8 +870,11 @@ async def get_workflow_effective_model_configuration(
 ) -> dict:
     """Model configuration a run of this workflow will use, without secrets.
 
-    `published` is what live calls bind to; `draft` is what a test run gets.
-    Credentials are reported as status only (kind, configured, account email).
+    `published` is what live calls bind to; `draft` is what a test run gets. Both
+    include the workflow's published per-slot settings, exactly as a run does.
+    A slot that cannot be resolved reports `error`/`error_code` instead of a
+    configuration. Credentials are reported as status only (kind, configured,
+    account email).
     """
     workflow = await db_client.get_workflow(
         workflow_id, organization_id=user.selected_organization_id
@@ -891,7 +894,9 @@ async def get_workflow_effective_model_configuration(
     readback = await build_effective_model_configuration_readback(
         organization_id=user.selected_organization_id,
         workflow_configurations=definition.workflow_configurations,
-        workflow_id=workflow.id if version == "published" else None,
+        # Draft runs apply the published per-slot settings too (see
+        # run_pipeline), so the draft readback resolves them the same way.
+        workflow_id=workflow.id,
     )
     return {
         "workflow_id": workflow.id,

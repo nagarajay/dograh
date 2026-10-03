@@ -18,7 +18,7 @@ All routes are under `/api/v1`, authenticate with `X-API-Key` (or a user token),
 | No slot rows, no override | `organization_default_inherited` (**still follows the organization default at call time**) |
 | Nothing configured anywhere | `unconfigured` |
 
-Existing workflows keep their current behavior until a slot is published for them (or they are backfilled with `scripts/backfill_workflow_slots.py`). Runtime reads only **published** slots; drafts never affect calls. If a published slot cannot be resolved (revoked credential, missing encryption key) the call fails; it does not fall back to another provider.
+Existing workflows keep their current behavior until a slot is published for them (or they are backfilled with `scripts/backfill_workflow_slots.py`). Runtime reads only **published** slots; drafts never affect calls. If a published slot cannot be resolved (revoked credential, missing encryption key) the call fails; it does not fall back to another provider. The same resolver serves live calls, draft test runs and every readback, so what the readback shows is what a run gets (draft runs also use the workflow's published slots).
 
 ## Template on create (`WORKFLOW_SLOT_TEMPLATE_ON_CREATE=true`)
 
@@ -52,7 +52,9 @@ POST /api/v1/model-credentials
 - `source_ref` is an opaque, non-secret pointer to AVSIQ Vault. Dograh does **not** read Vault; AVSIQ pushes the value.
 - **Rotation**: `POST` again with the same `credential_ref`; a new `version` is created. Slots keep the version they pinned until a new slot version is published.
 - `GET /model-credentials` lists metadata. `DELETE /model-credentials/{ref}/versions/{v}` revokes; refused with `409 credential_in_use` while a published slot pins it.
+- The revoke/publish invariant is enforced inside the database, not just checked beforehand: publish, rollback and template seeding take a shared lock on the credential version they pin, and revoke takes the exclusive lock while it counts published uses. Whichever commits first wins: a concurrent publish against a version being revoked returns `422 credential_revoked`, and a concurrent revoke against a version being published returns `409 credential_in_use`. A published slot therefore never pins a revoked credential. (If a live credential is revoked by some other path, such as manual SQL, runtime still fails closed and the readback reports it.)
 - Needs `PROVIDER_CREDENTIAL_ENCRYPTION_KEYS` on the server, otherwise `503 secret_store_unavailable`.
+- **Encryption-key rotation**: the variable takes a comma-separated list; the first key encrypts and every key decrypts, so adding a new key in front is safe at any time. There is no bulk re-encryption tool yet (`secret_store.reencrypt` exists as a library helper only). Until one is added, **keep every old key configured**: removing a key makes the credentials encrypted under it unreadable and the slots that pin them fail closed. `key_id` on each credential shows which key encrypted it.
 
 ## Readback
 
@@ -82,6 +84,20 @@ GET /api/v1/workflow/{workflow_id}/model-slots
 ```
 
 `revision` is the optimistic-lock counter for that slot. Send it back as `expected_revision`.
+
+### Unresolvable slots
+
+A slot that cannot be resolved (revoked credential, missing encryption key, template copy still pending) is reported **per slot**, never as a failed readback and never as `unconfigured`. `source` keeps saying where the slot comes from, and `effective` carries a sanitized, actionable error plus the provider and model that failed:
+
+```json
+{ "slot": "llm", "revision": 2, "source": "workflow_slot",
+  "published_version": 1, "draft_version": null, "published": { "…": "…" }, "draft": null,
+  "effective": { "provider": "openai", "model": "gpt-4.1-mini",
+    "error": "llm slot v1 of workflow 12: credential cred_9f2c1a7b34d05e6a81c2 v1 is revoked",
+    "error_code": "credential_revoked" } }
+```
+
+`error_code` is one of `credential_revoked`, `credential_not_found`, `secret_store_unavailable`, `secret_store_corrupt`, `slot_config_invalid`, `template_pending` (reported on every slot while `template_status` is `pending`). Messages name the slot, workflow and credential reference, never a secret value. `effective` is `null` only when nothing is configured (`source: "unconfigured"`). `GET /workflow/{id}/effective-model-configuration` reports the same `error`/`error_code` in the affected section instead of failing, and its `draft` and `published` variants both include the workflow's published slots, as a run does.
 
 ## Gemini-TTS model and voice catalog
 
@@ -124,9 +140,13 @@ Dograh does not synthesize, cache, scrape, or request a preview sample.
 ## Stored Gemini-TTS sample packs
 
 Sample-pack lifecycle APIs are platform-admin-only under
-`/api/v1/superuser/gemini-tts/sample-packs`. They require
-`X-Platform-Admin-Key`; tenant API keys and interactive superuser sessions are
-rejected. The request contains no credential:
+`/api/v1/superuser/gemini-tts/sample-packs`. They accept either the
+server-to-server `X-Platform-Admin-Key` or an interactive super-admin
+`Authorization: Bearer ...` session (the super-admin console uses the latter);
+tenant `X-API-Key` credentials are always rejected. If an `Authorization`
+header is present it alone decides the request, so an invalid or non-super-admin
+session is refused even when a valid platform key accompanies it. The request
+contains no credential:
 
 ```http
 POST /api/v1/superuser/gemini-tts/sample-packs
@@ -245,8 +265,8 @@ POST /api/v1/workflow/{workflow_id}/model-slots/{slot}/rollback
 | 404 | `workflow_not_found`, `credential_not_found`, `version_not_found` | Not found in your organization |
 | 409 | `stale_revision` (+ `current_revision`) | Slot changed since you read it; re-read and retry |
 | 409 | `invalid_transition`, `not_a_draft` | Publish before validation, wrong version, already live |
-| 409 | `embedding_index_incompatible`, `embedding_dimension_unsupported` | See below |
-| 409 | `credential_in_use` | Revoke refused |
+| 409 | `embedding_index_incompatible`, `embedding_dimension_unsupported`, `embedding_model_not_organization_index` | See below |
+| 409 | `credential_in_use` | Revoke refused while a published slot pins the version |
 | 422 | `unknown_provider`, `invalid_config`, `secret_in_config`, `credential_required`, `credential_kind_mismatch`, `credential_revoked`, `vertex_auth_not_supported` | Rejected input; messages never echo secret values |
 | 503 | `secret_store_unavailable` | Server has no encryption key |
 
@@ -311,7 +331,7 @@ Read the current revision of each slot first: `GET /api/v1/workflow/77/model-slo
 PUT /api/v1/workflow/77/model-slots/stt/draft
 { "expected_revision": <revision>,
   "config": { "provider": "google_vertex", "model": "gemini-3.5-transcribe-live-preview",
-              "language": "en-US", "project_id": "project-943ab014-8a47-48e4-a92", "location": "global" },
+              "language": "en-US", "project_id": "example-project-123456", "location": "global" },
   "credential": { "credential_ref": "cred_e809539e2dee4967a2cd", "version": 1 },
   "change_note": "Gemini transcription, API key + complete resource" }
 
@@ -319,7 +339,7 @@ PUT /api/v1/workflow/77/model-slots/tts/draft
 { "expected_revision": <revision>,
   "config": { "provider": "google_vertex", "model": "gemini-2.5-flash-tts",
               "voice": "Kore", "language": "en-US", "prompt": null,
-              "project_id": "project-943ab014-8a47-48e4-a92", "location": "global" },
+              "project_id": "example-project-123456", "location": "global" },
   "credential": { "credential_ref": "cred_e809539e2dee4967a2cd", "version": 1 },
   "change_note": "Gemini TTS, API key + complete resource" }
 
@@ -336,6 +356,8 @@ Validation does not call Google. Run `scripts/probe_gemini_speech.py` (set `VERT
 The knowledge base is per organization with one fixed 1536-dimension vector index; chunks record only the model id. Until per-index configuration exists:
 
 - An `embeddings` slot may only use the model already present in the organization's indexed chunks (any model if none are indexed). Otherwise validate/publish/rollback returns `409 embedding_index_incompatible`.
+- Ingestion and the index are **organization-wide**: ingestion always uses the organization's embeddings configuration, never a workflow slot. So an `embeddings` slot must also use the **same model** as the organization's embeddings configuration, otherwise it would query a different vector space than the one documents are written to and find nothing. Validate/publish/rollback returns `409 embedding_model_not_organization_index` (with `organization_model`) instead of accepting the slot. The slot's own project, location and credential may differ from the organization's: the same model yields the same vectors. If the organization has no embeddings configuration, only the indexed-chunk guard applies.
+- At call time a Vertex embeddings slot is resolved as **one configuration**: model, project, location, credentials and key all come from the slot (or, with no slot, all from the organization's configuration). They are never combined from two sources, and an incomplete or mixed configuration is refused rather than partly ignored.
 - Ingestion of a document with a different model fails with a clear error instead of mixing spaces.
 - Retrieval that returns zero rows because the query model differs from the index now raises an error instead of an empty result. `POST /knowledge-base/search` returns `409`.
-- Ingestion still uses the organization-level embeddings configuration, not a workflow slot.
+- The compatibility guards count **active** documents only. There is currently no endpoint that reactivates a deleted document; if one is added it must re-run this check, because a reactivated document indexed with another model would otherwise reintroduce a mismatch.

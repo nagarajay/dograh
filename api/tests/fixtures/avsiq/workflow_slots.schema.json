@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VoicePlatformWorkflowSlots (AVSIQ consumer contract)",
+  "type": "object",
+  "required": ["workflow_id", "workflow_uuid", "slots"],
+  "properties": {
+    "workflow_id": {"type": "integer"},
+    "workflow_uuid": {"type": "string"},
+    "template_status": {"enum": ["pending", null]},
+    "slots": {"type": "array", "items": {"$ref": "#/$defs/slotStatus"}}
+  },
+  "$defs": {
+    "slotStatus": {
+      "type": "object",
+      "required": ["slot", "revision", "source", "published_version", "draft_version", "published", "draft", "effective"],
+      "properties": {
+        "slot": {"enum": ["llm", "stt", "tts", "embeddings"]},
+        "revision": {"type": "integer"},
+        "source": {"enum": ["workflow_slot", "legacy_workflow_override", "organization_default_inherited", "unconfigured"]},
+        "published_version": {"type": ["integer", "null"]},
+        "draft_version": {"type": ["integer", "null"]},
+        "published": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/slotVersion"}]},
+        "draft": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/slotVersion"}]},
+        "effective": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/effective"}]}
+      }
+    },
+    "slotVersion": {
+      "type": "object",
+      "required": ["version", "state", "config", "credential", "validation_status", "origin"],
+      "properties": {
+        "version": {"type": "integer"},
+        "state": {"enum": ["draft", "published", "superseded", "discarded"]},
+        "config": {"type": "object"},
+        "credential": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "object", "required": ["credential_ref", "version"], "properties": {"credential_ref": {"type": "string"}, "version": {"type": "integer"}}}
+          ]
+        },
+        "validation_status": {"enum": ["unvalidated", "valid", "invalid"]},
+        "origin": {"type": "string"}
+      }
+    },
+    "effective": {
+      "type": "object",
+      "properties": {
+        "provider": {"type": ["string", "null"]},
+        "model": {"type": ["string", "null"]},
+        "credential": {
+          "type": "object",
+          "properties": {"kind": {"type": "string"}, "configured": {"type": ["boolean", "null"]}}
+        },
+        "error": {"type": "string"}
+      }
+    }
+  }
+}
