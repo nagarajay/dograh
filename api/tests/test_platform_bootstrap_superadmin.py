@@ -247,7 +247,9 @@ async def test_concurrent_first_bootstrap_produces_exactly_one_superadmin(
         )
 
         successes = [
-            r for r in results if isinstance(r, bootstrap_service.BootstrappedSuperadmin)
+            r
+            for r in results
+            if isinstance(r, bootstrap_service.BootstrappedSuperadmin)
         ]
         conflicts = [r for r in results if isinstance(r, ProvisioningConflict)]
         others = [

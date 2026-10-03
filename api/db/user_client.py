@@ -296,8 +296,7 @@ class UserClient(BaseDBClient):
 
             user = UserModel(
                 provider_id=(
-                    f"oss_{int(datetime.now(timezone.utc).timestamp())}_"
-                    f"{uuid.uuid4()}"
+                    f"oss_{int(datetime.now(timezone.utc).timestamp())}_{uuid.uuid4()}"
                 ),
                 email=normalized_email,
                 password_hash=password_hash,

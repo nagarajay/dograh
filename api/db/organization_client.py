@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import exists, func
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 
 from api.db.base_client import BaseDBClient

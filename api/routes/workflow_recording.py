@@ -11,8 +11,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from loguru import logger
 
-from api.constants import DEPLOYMENT_MODE
-from api.constants import RECORDING_UPLOAD_TOKEN_SECRET
+from api.constants import DEPLOYMENT_MODE, RECORDING_UPLOAD_TOKEN_SECRET
 from api.db import db_client
 from api.db.workflow_recording_client import generate_short_id
 from api.enums import StorageBackend
@@ -35,7 +34,12 @@ router = APIRouter(prefix="/workflow-recordings", tags=["workflow-recordings"])
 
 
 def _make_upload_token(
-    *, organization_id: int, recording_id: str, storage_key: str, file_size: int, mime_type: str
+    *,
+    organization_id: int,
+    recording_id: str,
+    storage_key: str,
+    file_size: int,
+    mime_type: str,
 ) -> str:
     payload = {
         "org": organization_id,
@@ -54,7 +58,9 @@ def _make_upload_token(
     return f"{encoded.decode()}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
 
 
-def _verify_upload_token(token: str, *, organization_id: int, recording_id: str, storage_key: str) -> dict:
+def _verify_upload_token(
+    token: str, *, organization_id: int, recording_id: str, storage_key: str
+) -> dict:
     try:
         encoded, supplied_signature = token.split(".", 1)
         expected_signature = hmac.new(
@@ -73,7 +79,9 @@ def _verify_upload_token(token: str, *, organization_id: int, recording_id: str,
             raise ValueError
         return payload
     except (ValueError, KeyError, TypeError, json.JSONDecodeError, binascii.Error):
-        raise HTTPException(status_code=409, detail="Invalid or expired recording upload")
+        raise HTTPException(
+            status_code=409, detail="Invalid or expired recording upload"
+        )
 
 
 async def _generate_unique_recording_id(organization_id: int) -> str:
@@ -204,12 +212,23 @@ async def create_recordings(
                 )
             object_metadata = await storage_fs.aget_file_metadata(rec_req.storage_key)
             if object_metadata is None:
-                raise HTTPException(status_code=409, detail="Uploaded recording object was not found")
+                raise HTTPException(
+                    status_code=409, detail="Uploaded recording object was not found"
+                )
             if object_metadata.get("size") != payload["file_size"]:
-                raise HTTPException(status_code=409, detail="Uploaded recording size does not match the upload request")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Uploaded recording size does not match the upload request",
+                )
             actual_content_type = object_metadata.get("content_type")
-            if actual_content_type and actual_content_type not in (payload["mime_type"], "application/octet-stream"):
-                raise HTTPException(status_code=409, detail="Uploaded recording content type does not match the upload request")
+            if actual_content_type and actual_content_type not in (
+                payload["mime_type"],
+                "application/octet-stream",
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Uploaded recording content type does not match the upload request",
+                )
             recording = await db_client.create_recording(
                 recording_id=rec_req.recording_id,
                 organization_id=user.selected_organization_id,
@@ -220,7 +239,11 @@ async def create_recordings(
                 tts_provider=rec_req.tts_provider,
                 tts_model=rec_req.tts_model,
                 tts_voice_id=rec_req.tts_voice_id,
-                metadata={**(rec_req.metadata or {}), "file_size": object_metadata.get("size"), "content_type": actual_content_type},
+                metadata={
+                    **(rec_req.metadata or {}),
+                    "file_size": object_metadata.get("size"),
+                    "content_type": actual_content_type,
+                },
             )
             results.append(_build_response(recording))
 

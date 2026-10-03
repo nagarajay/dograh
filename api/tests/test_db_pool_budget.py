@@ -42,9 +42,7 @@ def test_engine_uses_configured_pool(monkeypatch):
 
 
 def test_compose_default_budget_stays_under_limit():
-    per_process = _compose_default("DB_POOL_SIZE") + _compose_default(
-        "DB_MAX_OVERFLOW"
-    )
+    per_process = _compose_default("DB_POOL_SIZE") + _compose_default("DB_MAX_OVERFLOW")
     # ari_manager + campaign_orchestrator + 1 uvicorn + 1 arq
     default_processes = 4
     assert default_processes * per_process < SUPABASE_SESSION_LIMIT

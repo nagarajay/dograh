@@ -582,9 +582,7 @@ async def test_identity_update_rejects_a_reference_owned_by_another_org(db_sessi
                 display_name="Second Customer",
                 external_reference="avsiq-client-conflict",
             ),
-            user=SimpleNamespace(
-                id=second_user.id, selected_organization_id=second.id
-            ),
+            user=SimpleNamespace(id=second_user.id, selected_organization_id=second.id),
         )
 
     assert excinfo.value.status_code == 409
@@ -609,9 +607,7 @@ async def test_identity_update_keeps_the_reference_on_its_own_org(db_session):
             display_name="Renamed",
             external_reference="avsiq-client-idempotent",
         ),
-        user=SimpleNamespace(
-            id=user.id, selected_organization_id=organization.id
-        ),
+        user=SimpleNamespace(id=user.id, selected_organization_id=organization.id),
     )
 
     assert result.display_name == "Renamed"

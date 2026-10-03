@@ -50,6 +50,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "uq_api_keys_active_platform_provisioning", table_name="api_keys"
-    )
+    op.drop_index("uq_api_keys_active_platform_provisioning", table_name="api_keys")

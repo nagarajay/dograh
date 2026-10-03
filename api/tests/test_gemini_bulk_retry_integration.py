@@ -712,17 +712,27 @@ async def test_retrying_one_failed_voice_leaves_every_other_voice_untouched(live
 
 async def test_repeated_or_multi_tab_retry_creates_exactly_one_generation(live):
     client, redis = live
-    pack_id = await seed(client, [asset("Achird"), asset("Achernar", 1, "completed", True, storage_key="a.wav")])
+    pack_id = await seed(
+        client,
+        [asset("Achird"), asset("Achernar", 1, "completed", True, storage_key="a.wav")],
+    )
     # Six tabs press Retry at the same moment.
     results = await asyncio.gather(
-        *(packs.generate_sample_voice(pack_id, "Achird", _request(True)) for _ in range(6)),
+        *(
+            packs.generate_sample_voice(pack_id, "Achird", _request(True))
+            for _ in range(6)
+        ),
         return_exceptions=True,
     )
     accepted = [r for r in results if not isinstance(r, BaseException)]
     refused = [r for r in results if isinstance(r, RuntimeError)]
     assert len(accepted) == 1 and len(refused) == 5
     assert all("already" in str(r) for r in refused)
-    versions = [a.version for a in (await client.get_pack(pack_id)).assets if a.voice_id == "Achird"]
+    versions = [
+        a.version
+        for a in (await client.get_pack(pack_id)).assets
+        if a.voice_id == "Achird"
+    ]
     assert sorted(versions) == [1, 2]
     assert await redis.zcard("arq:queue") == 1
     # A later click while it is generating is also refused, not queued again.
@@ -730,19 +740,38 @@ async def test_repeated_or_multi_tab_retry_creates_exactly_one_generation(live):
         await packs.generate_sample_voice(pack_id, "Achird", _request(True))
 
 
-async def test_a_failed_retry_can_be_retried_again_and_success_replaces_nothing(live, monkeypatch):
+async def test_a_failed_retry_can_be_retried_again_and_success_replaces_nothing(
+    live, monkeypatch
+):
     client, redis = live
-    pack_id = await seed(client, [asset("Achird"), asset("Achernar", 1, "completed", True, storage_key="a.wav", sha256="a")])
+    pack_id = await seed(
+        client,
+        [
+            asset("Achird"),
+            asset("Achernar", 1, "completed", True, storage_key="a.wav", sha256="a"),
+        ],
+    )
     synth, _ = fake_provider(monkeypatch)
     synth.side_effect = RuntimeError("test provider unavailable")
     await packs.generate_sample_voice(pack_id, "Achird", _request(True))
     await run_worker(redis)
-    assert [a.status for a in (await client.get_pack(pack_id)).assets if a.voice_id == "Achird"] == ["failed", "failed"]
+    assert [
+        a.status
+        for a in (await client.get_pack(pack_id)).assets
+        if a.voice_id == "Achird"
+    ] == ["failed", "failed"]
     synth.side_effect = None
     await packs.generate_sample_voice(pack_id, "Achird", _request(True))
     await run_worker(redis)
     pack = await client.get_pack(pack_id)
     achird = [a for a in pack.assets if a.voice_id == "Achird"]
-    assert [a.status for a in achird] == ["failed", "failed", "completed"] and achird[-1].is_current
+    assert [a.status for a in achird] == ["failed", "failed", "completed"] and achird[
+        -1
+    ].is_current
     ach = next(a for a in pack.assets if a.voice_id == "Achernar")
-    assert (ach.status, ach.is_current, ach.storage_key, ach.sha256) == ("completed", True, "a.wav", "a")
+    assert (ach.status, ach.is_current, ach.storage_key, ach.sha256) == (
+        "completed",
+        True,
+        "a.wav",
+        "a",
+    )

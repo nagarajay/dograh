@@ -14,8 +14,8 @@ or LLM, so they are deterministic.
 """
 
 import asyncio
-from types import SimpleNamespace
 import time
+from types import SimpleNamespace
 
 import pytest
 from pipecat.audio.turn.base_turn_analyzer import (

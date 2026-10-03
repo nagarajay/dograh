@@ -586,7 +586,9 @@ async def test_catalog_sample_lookup_matches_revision_and_location(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_catalog_offers_only_the_current_revision_when_none_is_pinned(monkeypatch):
+async def test_catalog_offers_only_the_current_revision_when_none_is_pinned(
+    monkeypatch,
+):
     """A voice's sample must belong to the selected model and its current catalog
     revision, never to a superseded revision that shares the same text."""
     from api.services.configuration.options.google_vertex_catalog import (

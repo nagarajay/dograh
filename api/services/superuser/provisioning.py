@@ -129,9 +129,7 @@ async def provision_client_organization(
         return await _report_existing(organization, display_name, service_email)
 
     await db_client.add_user_to_organization(service_user.id, organization.id)
-    await db_client.update_user_selected_organization(
-        service_user.id, organization.id
-    )
+    await db_client.update_user_selected_organization(service_user.id, organization.id)
     service_user.selected_organization_id = organization.id
 
     bootstrapped = await ensure_organization_bootstrapped(

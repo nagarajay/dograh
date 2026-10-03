@@ -9,12 +9,12 @@ from api.constants import (
     MINIO_PUBLIC_ENDPOINT,
     MINIO_SECRET_KEY,
     MINIO_SECURE,
+    REQUIRE_EXTERNAL_S3_STORAGE,
     S3_ADDRESSING_STYLE,
     S3_BUCKET,
     S3_ENDPOINT_URL,
     S3_REGION,
     S3_SIGNATURE_VERSION,
-    REQUIRE_EXTERNAL_S3_STORAGE,
 )
 from api.enums import Environment, StorageBackend
 

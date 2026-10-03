@@ -634,7 +634,6 @@ class TestStartGreeting:
         assert isinstance(queued_frame, LLMContextFrame)
         assert queued_frame.context is context
 
-
     @pytest.mark.asyncio
     async def test_start_greeting_bootstraps_llm_generation_after_playback(
         self, text_workflow: WorkflowGraph
