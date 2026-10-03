@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import re
 
 from loguru import logger
@@ -70,6 +71,15 @@ class _OrgRoutingExporter(SpanExporter):
         self._org_hosts = {}
         self._org_project_ids = {}
         self._org_traces_public = {}
+        # SHA-256 of each org's configured Basic-auth value. Credential changes
+        # are detected by comparing these, not by reading the exporter's private
+        # ``_headers`` (which newer OpenTelemetry releases no longer keep). Only
+        # the digest is stored: the secret itself is never retained or logged.
+        self._org_auth_digests = {}
+
+    @staticmethod
+    def _auth_digest(auth):
+        return hashlib.sha256(auth.encode()).hexdigest()
 
     def get_org_host(self, org_id):
         return self._org_hosts.get(str(org_id))
@@ -107,9 +117,10 @@ class _OrgRoutingExporter(SpanExporter):
         if key in self._org_exporters:
             existing = self._org_exporters[key]
             if (
+                # The endpoint is derived from the normalized host, so comparing
+                # the host covers it without reading exporter internals.
                 self._org_hosts.get(key) == normalized_host
-                and getattr(existing, "_endpoint", None) == endpoint
-                and existing._headers.get("Authorization") == f"Basic {auth}"
+                and self._org_auth_digests.get(key) == self._auth_digest(auth)
             ):
                 return
             # Credentials changed — shut down the old exporter
@@ -122,6 +133,7 @@ class _OrgRoutingExporter(SpanExporter):
             headers={"Authorization": f"Basic {auth}"},
         )
         self._org_exporters[key] = exporter
+        self._org_auth_digests[key] = self._auth_digest(auth)
         logger.info(f"Registered OTEL exporter for org {org_id}")
 
     def unregister_org(self, org_id):
@@ -130,6 +142,7 @@ class _OrgRoutingExporter(SpanExporter):
         self._org_hosts.pop(key, None)
         self._org_project_ids.pop(key, None)
         self._org_traces_public.pop(key, None)
+        self._org_auth_digests.pop(key, None)
         if exporter:
             exporter.shutdown()
             logger.info(f"Unregistered OTEL exporter for org {org_id}")

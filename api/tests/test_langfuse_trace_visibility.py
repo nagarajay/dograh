@@ -113,3 +113,94 @@ def test_visibility_agrees_with_routing(exporter):
         set_current_org_id(org_id)
         assert exporter.has_org(org_id) is routed_to_own_project
         assert resolve(None) is routed_to_own_project
+
+
+# --- credential change detection ---------------------------------------------
+class _BareExporter:
+    """An exporter that exposes no private state, like current OpenTelemetry."""
+
+    instances: list = []
+
+    def __init__(self, endpoint, headers):
+        self.shutdown_calls = 0
+        type(self).instances.append(self)
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
+
+@pytest.fixture
+def bare_exporters():
+    _BareExporter.instances = []
+    with patch.object(tracing_config, "OTLPSpanExporter", _BareExporter):
+        yield _BareExporter
+
+
+def test_identical_registration_reuses_the_exporter_without_private_state(
+    exporter, bare_exporters
+):
+    exporter.register_org(ORG, **CREDS, traces_public=True)
+    exporter.register_org(ORG, **CREDS, traces_public=False)
+
+    assert len(bare_exporters.instances) == 1
+    assert bare_exporters.instances[0].shutdown_calls == 0
+
+
+def test_rotated_secret_rebuilds_the_exporter_and_shuts_the_old_one_down(
+    exporter, bare_exporters
+):
+    exporter.register_org(ORG, **CREDS)
+    exporter.register_org(ORG, **{**CREDS, "secret_key": "sk-lf-rotated"})
+
+    assert len(bare_exporters.instances) == 2
+    assert bare_exporters.instances[0].shutdown_calls == 1
+    assert exporter._org_exporters[str(ORG)] is bare_exporters.instances[1]
+    # And the new value is now the baseline: re-saving it is a no-op.
+    exporter.register_org(ORG, **{**CREDS, "secret_key": "sk-lf-rotated"})
+    assert len(bare_exporters.instances) == 2
+
+
+def test_rotated_public_key_or_host_rebuilds_the_exporter(exporter, bare_exporters):
+    exporter.register_org(ORG, **CREDS)
+    exporter.register_org(ORG, **{**CREDS, "public_key": "pk-lf-other"})
+    exporter.register_org(
+        ORG,
+        **{
+            **CREDS,
+            "public_key": "pk-lf-other",
+            "host": "https://eu.langfuse.example.com",
+        },
+    )
+
+    assert len(bare_exporters.instances) == 3
+
+
+def test_unregister_forgets_the_credential_so_reconnecting_rebuilds(
+    exporter, bare_exporters
+):
+    exporter.register_org(ORG, **CREDS)
+    exporter.unregister_org(ORG)
+    assert str(ORG) not in exporter._org_auth_digests
+    exporter.register_org(ORG, **CREDS)
+
+    assert len(bare_exporters.instances) == 2
+
+
+def test_the_secret_is_neither_stored_nor_logged(exporter, bare_exporters):
+    import base64
+
+    from loguru import logger
+
+    messages = []
+    sink = logger.add(lambda m: messages.append(str(m)), level="DEBUG")
+    try:
+        exporter.register_org(ORG, **CREDS)
+        exporter.register_org(ORG, **{**CREDS, "secret_key": "sk-lf-rotated"})
+        exporter.unregister_org(ORG)
+    finally:
+        logger.remove(sink)
+    auth = base64.b64encode(b"pk-lf-test:sk-lf-test").decode()
+    stored = repr(vars(exporter))
+    for secret in ("sk-lf-test", "sk-lf-rotated", auth):
+        assert secret not in stored
+        assert all(secret not in m for m in messages)
