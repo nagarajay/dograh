@@ -1,34 +1,43 @@
-"""The server-to-server credential that provisions client organizations.
+"""Authorization for platform-level endpoints: provisioning and the sample library.
 
-Three credentials reach this API and they are deliberately not
-interchangeable:
+Three kinds of credential can reach these endpoints, and they are deliberately
+not interchangeable:
 
 ``X-API-Key``
     An organization API key. Scoped to exactly one tenant by construction --
     :func:`api.services.auth.depends._handle_api_key_auth` pins the caller's
     ``selected_organization_id`` to the key's organization -- so it can never
-    be the credential that creates a *new* tenant or mints a key for another
-    one. It is rejected here outright, exactly as
-    :func:`api.services.auth.depends.get_superuser` rejects it.
+    be the credential that creates a *new* tenant, mints a key for another one
+    or spends the platform's generation budget. It is rejected here outright,
+    exactly as :func:`api.services.auth.depends.get_superuser` rejects it, and
+    that check comes first, whatever else is presented.
 
-``Authorization``
-    An interactive super-admin session. Held by a person, obtained through a
-    browser sign-in, and already the credential for the read-only super-admin
-    console. Provisioning runs unattended from AVSIQ, which has no browser and
-    no session to refresh, so making it depend on that flow would either mean
-    storing a human's password or weakening ``get_superuser``. Neither happens:
-    this module adds a credential rather than relaxing that one.
+``Authorization`` (interactive super-admin session)
+    Held by a person, obtained through a browser sign-in. It is validated by
+    :func:`api.services.auth.depends.get_superuser` and is what the super-admin
+    console uses, so a signed-in super-admin may call every endpoint guarded by
+    this dependency. :func:`get_superuser` itself is unchanged: this module
+    adds a way in rather than relaxing it. If an ``Authorization`` header is
+    present it alone decides the request: an invalid, expired or non-super-admin
+    session is refused even when a valid ``X-Platform-Admin-Key`` accompanies
+    it. There is no fallback from one credential to the other, so a proxy that
+    injects a stale ``Authorization`` header into a server-to-server call gets
+    a clear 401/403 instead of silently changing which credential applies.
 
 ``X-Platform-Admin-Key``
-    This one. A single shared secret held by the provisioning system, checked
-    with a constant-time comparison, granting exactly two endpoints and nothing
-    else. It authenticates no user and resolves no ``UserModel``, so there is
-    no tenant context for a bug to leak: every route guarded by it names the
-    organization it acts on explicitly.
+    A single shared secret held by the provisioning system (AVSIQ), checked
+    with a constant-time comparison. It runs unattended and has no browser or
+    session to refresh. It authenticates no user and resolves no ``UserModel``,
+    so there is no tenant context for a bug to leak: every route guarded by
+    this dependency names the organization it acts on explicitly. It grants
+    the same set of endpoints as a super-admin session: tenant provisioning
+    and API-key minting, bootstrap of a super-admin, and the platform-owned
+    Gemini-TTS sample library. Treat it as a root credential.
 
-Unset (or too short to be worth anything) means provisioning is unavailable
+Unset (or too short to be worth anything) means the key path is unavailable
 rather than open. A deployment that never provisions from outside is the common
-case and must not be the insecure one.
+case and must not be the insecure one; the super-admin session path is
+independent of the key and keeps working.
 """
 
 import secrets

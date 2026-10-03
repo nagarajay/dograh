@@ -4,10 +4,12 @@ The arrangement under test has three parts, and each of them is load-bearing:
 
 - ``ENABLE_SIGNUP=false``. Public signup is the hole this replaces, so the
   tests start by pinning that it stays shut.
-- ``X-Platform-Admin-Key``. A server-to-server secret that grants exactly the
-  two provisioning endpoints. Not an organization API key -- those are
-  tenant-scoped and are refused outright -- and not a super-admin session,
-  which is interactive and is left exactly as strict as it was.
+- ``X-Platform-Admin-Key``. A server-to-server secret for the platform
+  endpoints (provisioning, super-admin bootstrap, the sample library). Not an
+  organization API key -- those are tenant-scoped and are refused outright.
+  A signed-in super-admin session is accepted on the same endpoints (the
+  console uses it) but ``get_superuser`` itself stays exactly as strict as it
+  was; see ``platform_admin.py`` for the dual-header rules pinned below.
 - Idempotency on ``external_reference``. The provisioning system retries; a
   retry must return the client it already has, and a request that contradicts
   that client must be refused rather than applied.
@@ -17,7 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from api import constants
@@ -142,9 +144,7 @@ def test_provisioning_works_while_signup_is_disabled(
 @pytest.mark.asyncio
 async def test_valid_key_is_accepted(platform_key):
     assert (
-        await require_platform_admin(
-            x_platform_admin_key=PLATFORM_KEY, x_api_key=None
-        )
+        await require_platform_admin(x_platform_admin_key=PLATFORM_KEY, x_api_key=None)
         is None
     )
 
@@ -312,9 +312,7 @@ async def test_first_provisioning_creates_the_whole_tenant(db_session, no_bootst
 
 
 @pytest.mark.asyncio
-async def test_the_service_account_password_is_never_returned(
-    db_session, no_bootstrap
-):
+async def test_the_service_account_password_is_never_returned(db_session, no_bootstrap):
     """AVSIQ holds no Dograh password, so there is none to vault or rotate."""
     result = await provisioning.provision_client_organization(
         display_name="Northwind",
@@ -325,7 +323,8 @@ async def test_the_service_account_password_is_never_returned(
     stored = await db_session.get_user_by_id(result.service_user.id)
     assert stored.password_hash
     assert not any(
-        "password" in field for field in provisioning.ProvisionedOrganization.__annotations__
+        "password" in field
+        for field in provisioning.ProvisionedOrganization.__annotations__
     )
 
 
@@ -568,10 +567,12 @@ async def test_a_retry_replaces_rather_than_appends(db_session, no_bootstrap):
     original, original_raw, _ = await provisioning.mint_organization_api_key(
         organization_id=tenant.organization.id
     )
-    replacement, replacement_raw, archived = (
-        await provisioning.mint_organization_api_key(
-            organization_id=tenant.organization.id
-        )
+    (
+        replacement,
+        replacement_raw,
+        archived,
+    ) = await provisioning.mint_organization_api_key(
+        organization_id=tenant.organization.id
     )
 
     assert replacement.id != original.id
@@ -595,9 +596,7 @@ async def test_the_previous_key_stops_authenticating(db_session, no_bootstrap):
     )
     assert await db_session.validate_api_key(original_raw) is not None
 
-    await provisioning.mint_organization_api_key(
-        organization_id=tenant.organization.id
-    )
+    await provisioning.mint_organization_api_key(organization_id=tenant.organization.id)
 
     assert await db_session.validate_api_key(original_raw) is None
 
@@ -611,9 +610,7 @@ async def test_the_replacement_key_works(db_session, no_bootstrap):
         service_email="svc@example.com",
     )
 
-    await provisioning.mint_organization_api_key(
-        organization_id=tenant.organization.id
-    )
+    await provisioning.mint_organization_api_key(organization_id=tenant.organization.id)
     replacement, replacement_raw, _ = await provisioning.mint_organization_api_key(
         organization_id=tenant.organization.id
     )
@@ -642,11 +639,8 @@ async def test_repeated_mints_leave_exactly_one_active_key(db_session, no_bootst
 
     active = [
         key
-        for key in await db_session.get_api_keys_by_organization(
-            tenant.organization.id
-        )
-        if key.is_active
-        and key.name == constants.PLATFORM_PROVISIONING_API_KEY_NAME
+        for key in await db_session.get_api_keys_by_organization(tenant.organization.id)
+        if key.is_active and key.name == constants.PLATFORM_PROVISIONING_API_KEY_NAME
     ]
     assert len(active) == 1
     assert active[0].key_prefix == raws[-1][: len(active[0].key_prefix)]
@@ -673,9 +667,7 @@ async def test_the_database_refuses_a_second_active_key(db_session, no_bootstrap
         external_reference="avsiq-client-0001",
         service_email="svc@example.com",
     )
-    await provisioning.mint_organization_api_key(
-        organization_id=tenant.organization.id
-    )
+    await provisioning.mint_organization_api_key(organization_id=tenant.organization.id)
 
     with pytest.raises(IntegrityError):
         await db_session.create_api_key(
@@ -742,12 +734,8 @@ async def test_ordinary_keys_are_untouched_by_rotation(db_session, no_bootstrap)
         created_by=tenant.service_user.id,
     )
 
-    await provisioning.mint_organization_api_key(
-        organization_id=tenant.organization.id
-    )
-    await provisioning.mint_organization_api_key(
-        organization_id=tenant.organization.id
-    )
+    await provisioning.mint_organization_api_key(organization_id=tenant.organization.id)
+    await provisioning.mint_organization_api_key(organization_id=tenant.organization.id)
 
     assert await db_session.validate_api_key(client_raw) is not None
 
@@ -769,12 +757,8 @@ async def test_rotation_does_not_reach_another_tenant(db_session, no_bootstrap):
     _, first_raw, _ = await provisioning.mint_organization_api_key(
         organization_id=first.organization.id
     )
-    await provisioning.mint_organization_api_key(
-        organization_id=second.organization.id
-    )
-    await provisioning.mint_organization_api_key(
-        organization_id=second.organization.id
-    )
+    await provisioning.mint_organization_api_key(organization_id=second.organization.id)
+    await provisioning.mint_organization_api_key(organization_id=second.organization.id)
 
     still_valid = await db_session.validate_api_key(first_raw)
     assert still_valid is not None
@@ -796,9 +780,7 @@ async def test_minting_for_a_memberless_organization_is_refused(db_session):
     )
 
     with pytest.raises(provisioning.ProvisioningConflict):
-        await provisioning.mint_organization_api_key(
-            organization_id=organization.id
-        )
+        await provisioning.mint_organization_api_key(organization_id=organization.id)
 
 
 def test_minted_key_is_returned_once_over_http(monkeypatch, platform_key, route_client):
@@ -877,3 +859,97 @@ def test_unknown_organization_surfaces_as_404(monkeypatch, platform_key, route_c
     )
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 6. Credential precedence on ``require_platform_admin``
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def guarded_client(monkeypatch, platform_key):
+    app = FastAPI()
+
+    @app.get("/guarded", dependencies=[Depends(require_platform_admin)])
+    async def guarded():
+        return {"ok": True}
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _session(monkeypatch, *, superuser):
+    from api.services.auth import depends as auth_depends
+
+    monkeypatch.setattr(
+        auth_depends,
+        "get_user",
+        AsyncMock(
+            return_value=SimpleNamespace(id=1, is_superuser=superuser, provider_id="p")
+        ),
+    )
+
+
+def test_platform_key_alone_is_accepted(guarded_client, platform_key):
+    assert (
+        guarded_client.get(
+            "/guarded", headers={PLATFORM_ADMIN_HEADER: platform_key}
+        ).status_code
+        == 200
+    )
+
+
+def test_superadmin_session_alone_is_accepted_even_without_a_configured_key(
+    guarded_client, monkeypatch
+):
+    monkeypatch.setattr(constants, "PLATFORM_ADMIN_API_KEY", None)
+    _session(monkeypatch, superuser=True)
+    assert (
+        guarded_client.get(
+            "/guarded", headers={"Authorization": "Bearer s"}
+        ).status_code
+        == 200
+    )
+
+
+def test_ordinary_user_session_is_refused(guarded_client, monkeypatch):
+    _session(monkeypatch, superuser=False)
+    assert (
+        guarded_client.get(
+            "/guarded", headers={"Authorization": "Bearer s"}
+        ).status_code
+        == 403
+    )
+
+
+def test_authorization_header_decides_alone_there_is_no_fallback_to_the_key(
+    guarded_client, monkeypatch, platform_key
+):
+    """A valid platform key does not rescue a refused session presented with it."""
+    _session(monkeypatch, superuser=False)
+    response = guarded_client.get(
+        "/guarded",
+        headers={"Authorization": "Bearer stale", PLATFORM_ADMIN_HEADER: platform_key},
+    )
+    assert response.status_code == 403
+
+
+def test_valid_session_wins_even_with_a_wrong_key(guarded_client, monkeypatch):
+    _session(monkeypatch, superuser=True)
+    response = guarded_client.get(
+        "/guarded",
+        headers={"Authorization": "Bearer s", PLATFORM_ADMIN_HEADER: "not-the-key"},
+    )
+    assert response.status_code == 200
+
+
+def test_organization_api_key_is_refused_before_anything_else(
+    guarded_client, monkeypatch, platform_key
+):
+    _session(monkeypatch, superuser=True)
+    for extra in (
+        {},
+        {"Authorization": "Bearer s"},
+        {PLATFORM_ADMIN_HEADER: platform_key},
+    ):
+        response = guarded_client.get(
+            "/guarded", headers={"X-API-Key": "dg-key", **extra}
+        )
+        assert response.status_code == 403, extra
