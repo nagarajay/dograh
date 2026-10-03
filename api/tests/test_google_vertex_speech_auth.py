@@ -39,13 +39,26 @@ def test_gemini_voice_catalog_is_exact_and_validates_voice_ids():
     voices = gemini_tts_voices("gemini-3.1-flash-tts-preview")
     assert len(voices) == 30
     assert {voice.id for voice in voices} >= {"Kore", "Puck", "Charon"}
-    assert check_vertex_config(
-        "tts", model="gemini-3.1-flash-tts-preview", location="global",
-        has_api_key=True, has_credentials=False, project_id="p", voice="Kore"
-    ) is None
+    assert (
+        check_vertex_config(
+            "tts",
+            model="gemini-3.1-flash-tts-preview",
+            location="global",
+            has_api_key=True,
+            has_credentials=False,
+            project_id="p",
+            voice="Kore",
+        )
+        is None
+    )
     assert "not in the documented voice" in check_vertex_config(
-        "tts", model="gemini-3.1-flash-tts-preview", location="global",
-        has_api_key=True, has_credentials=False, project_id="p", voice="Unknown"
+        "tts",
+        model="gemini-3.1-flash-tts-preview",
+        location="global",
+        has_api_key=True,
+        has_credentials=False,
+        project_id="p",
+        voice="Unknown",
     )
 
 
@@ -120,8 +133,11 @@ def test_api_key_tts_uses_a_vertex_client_never_ai_studio():
 
 def test_api_key_tts_keeps_project_location_in_complete_model_resource():
     cfg = GoogleVertexTTSConfiguration(
-        api_key=KEY, project_id="proj-1", location="global",
-        model="gemini-3.1-flash-tts-preview", voice="Kore"
+        api_key=KEY,
+        project_id="proj-1",
+        location="global",
+        model="gemini-3.1-flash-tts-preview",
+        voice="Kore",
     )
     with patch.object(sf, "GenaiClient"):
         service = sf.create_tts_service(SimpleNamespace(tts=cfg), _audio())
@@ -137,8 +153,10 @@ def test_service_account_tts_still_uses_cloud_text_to_speech():
 
 
 class _Chunk:
-    def __init__(self, data):
-        part = SimpleNamespace(inline_data=SimpleNamespace(data=data))
+    def __init__(self, data, mime_type=None):
+        part = SimpleNamespace(
+            inline_data=SimpleNamespace(data=data, mime_type=mime_type)
+        )
         self.candidates = [SimpleNamespace(content=SimpleNamespace(parts=[part]))]
 
 
@@ -161,8 +179,12 @@ def test_api_key_tts_pins_gemini_native_output_rate():
 @pytest.mark.asyncio
 async def test_api_key_tts_streams_pcm_with_voice_language_and_prompt():
     service = _api_key_service(
-        model="gemini-3.1-flash-tts-preview", voice="Puck", language="en-US", prompt="calm",
-        project_id="proj-1", location="global"
+        model="gemini-3.1-flash-tts-preview",
+        voice="Puck",
+        language="en-US",
+        prompt="calm",
+        project_id="proj-1",
+        location="global",
     )
     audio = b"\x01\x02" * 40000
 
@@ -180,7 +202,10 @@ async def test_api_key_tts_streams_pcm_with_voice_language_and_prompt():
     assert all(f.sample_rate == 24000 and f.num_channels == 1 for f in out)
     assert b"".join(f.audio for f in out) == audio
     call = models.generate_content_stream.call_args.kwargs
-    assert call["model"] == "projects/proj-1/locations/global/publishers/google/models/gemini-3.1-flash-tts-preview"
+    assert (
+        call["model"]
+        == "projects/proj-1/locations/global/publishers/google/models/gemini-3.1-flash-tts-preview"
+    )
     assert call["contents"] == "calm: Hello there."
     speech = call["config"].speech_config
     assert call["config"].response_modalities == ["AUDIO"]
@@ -325,3 +350,65 @@ async def test_api_key_tts_request_construction_and_audio_decoding_end_to_end():
     voice = speech["voiceConfig"]["prebuiltVoiceConfig"]
     # The SDK serializes this one field in snake_case; proto3 JSON accepts both.
     assert (voice.get("voiceName") or voice.get("voice_name")) == "Kore"
+
+
+@pytest.mark.parametrize(
+    "mime",
+    [
+        None,
+        "audio/L16;codec=pcm;rate=24000",
+        "audio/pcm;rate=24000",
+        "audio/l16; rate=24000; channels=1",
+    ],
+)
+def test_pcm_audio_metadata_that_matches_is_accepted(mime):
+    sf._check_pcm_audio_mime(mime, expected_rate=24000)
+
+
+@pytest.mark.parametrize(
+    "mime",
+    [
+        "audio/L16;codec=pcm;rate=16000",  # another sample rate
+        "audio/wav",  # a container, not raw PCM
+        "audio/mpeg",
+        "audio/L16;codec=pcm;rate=24000;channels=2",
+        "audio/pcm;rate=fast",
+    ],
+)
+def test_incompatible_audio_metadata_is_rejected_clearly(mime):
+    with pytest.raises(RuntimeError, match="unsupported audio format.*24000 Hz"):
+        sf._check_pcm_audio_mime(mime, expected_rate=24000)
+
+
+@pytest.mark.asyncio
+async def test_api_key_tts_fails_with_an_error_frame_on_incompatible_audio_format():
+    service = _api_key_service()
+
+    async def stream():
+        yield _Chunk(b"\x01\x02" * 40000, "audio/L16;codec=pcm;rate=16000")
+
+    models = SimpleNamespace(generate_content_stream=AsyncMock(return_value=stream()))
+    service._client = SimpleNamespace(aio=SimpleNamespace(models=models))
+
+    frames = [f async for f in service.run_tts("Hello there.", "ctx")]
+
+    assert not [f for f in frames if isinstance(f, TTSAudioRawFrame)]
+    errors = [f for f in frames if isinstance(f, ErrorFrame)]
+    assert len(errors) == 1 and "16000" in errors[0].error
+
+
+@pytest.mark.asyncio
+async def test_api_key_tts_accepts_the_documented_gemini_audio_format():
+    service = _api_key_service()
+    audio = b"\x01\x02" * 40000
+
+    async def stream():
+        yield _Chunk(audio, "audio/L16;codec=pcm;rate=24000")
+
+    models = SimpleNamespace(generate_content_stream=AsyncMock(return_value=stream()))
+    service._client = SimpleNamespace(aio=SimpleNamespace(models=models))
+
+    frames = [f async for f in service.run_tts("Hello there.", "ctx")]
+
+    assert not [f for f in frames if isinstance(f, ErrorFrame)]
+    assert b"".join(f.audio for f in frames if isinstance(f, TTSAudioRawFrame)) == audio

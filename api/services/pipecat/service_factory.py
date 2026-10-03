@@ -395,6 +395,37 @@ def _vertex_model_resource(model: str, project_id: str | None, location: str) ->
     )
 
 
+def _check_pcm_audio_mime(mime_type: str | None, *, expected_rate: int) -> None:
+    """Refuse audio that is not the 16-bit mono PCM the frames are labelled as.
+
+    Gemini-TTS describes its output as e.g. ``audio/L16;codec=pcm;rate=24000``.
+    When the provider sends that metadata it must say raw 16-bit PCM at the
+    native rate and one channel; anything else (a WAV container, another rate)
+    would otherwise be played or stored as 24 kHz mono and sound wrong. Absent
+    metadata is accepted: the catalogue already pins the format per model.
+    """
+    if not mime_type:
+        return
+    main, *params = [part.strip().lower() for part in str(mime_type).split(";")]
+    options = dict(
+        (key.strip(), value.strip())
+        for key, _, value in (p.partition("=") for p in params)
+    )
+    raw_pcm = main in {"audio/l16", "audio/pcm", "audio/x-raw"} or (
+        main.startswith("audio/") and options.get("codec") == "pcm"
+    )
+    try:
+        rate = int(options["rate"]) if "rate" in options else expected_rate
+        channels = int(options.get("channels", 1))
+    except ValueError:
+        raw_pcm, rate, channels = False, 0, 0
+    if not (raw_pcm and rate == expected_rate and channels == 1):
+        raise RuntimeError(
+            f"Gemini-TTS returned unsupported audio format {mime_type!r}; "
+            f"expected 16-bit mono PCM at {expected_rate} Hz"
+        )
+
+
 class DograhGeminiVertexApiTTSService(GeminiTTSService):
     """Gemini-TTS over the Vertex API (``streamGenerateContent``) with an API key.
 
@@ -486,10 +517,15 @@ class DograhGeminiVertexApiTTSService(GeminiTTSService):
                 trace("response_chunk")
                 feedback = getattr(chunk, "prompt_feedback", None)
                 if feedback and feedback.block_reason:
-                    raise RuntimeError(f"Google safety block: {feedback.block_reason.name}")
+                    raise RuntimeError(
+                        f"Google safety block: {feedback.block_reason.name}"
+                    )
                 for candidate in (chunk.candidates or [])[:1]:
                     finish = getattr(candidate, "finish_reason", None)
-                    if finish and finish.name not in {"STOP", "FINISH_REASON_UNSPECIFIED"}:
+                    if finish and finish.name not in {
+                        "STOP",
+                        "FINISH_REASON_UNSPECIFIED",
+                    }:
                         raise RuntimeError(f"Google finish reason: {finish.name}")
                     for part in (
                         candidate.content.parts if candidate.content else None
@@ -497,8 +533,16 @@ class DograhGeminiVertexApiTTSService(GeminiTTSService):
                         data = part.inline_data.data if part.inline_data else None
                         if not data:
                             continue
+                        mime_type = getattr(part.inline_data, "mime_type", None)
+                        _check_pcm_audio_mime(
+                            mime_type, expected_rate=self.GOOGLE_SAMPLE_RATE
+                        )
                         if not first:
-                            trace("first_audio", audio_bytes=len(data), mime_type=getattr(part.inline_data, "mime_type", None))
+                            trace(
+                                "first_audio",
+                                audio_bytes=len(data),
+                                mime_type=mime_type,
+                            )
                             await self.stop_ttfb_metrics()
                             first = True
                         buffer += data
@@ -522,7 +566,9 @@ class DograhGeminiVertexApiTTSService(GeminiTTSService):
             for private_value in (self._vertex_api_key, contents, text, prompt):
                 if private_value:
                     detail = detail.replace(private_value, "[REDACTED]")
-            yield ErrorFrame(error=f"Gemini Vertex TTS generation error: {detail}", exception=e)
+            yield ErrorFrame(
+                error=f"Gemini Vertex TTS generation error: {detail}", exception=e
+            )
         finally:
             # The google-genai stream owns an HTTP response body. Explicitly
             # close it when the provider stalls or the ARQ job is cancelled so
