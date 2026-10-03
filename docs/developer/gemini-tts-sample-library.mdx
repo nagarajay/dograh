@@ -123,12 +123,51 @@ are automatic. New versions use new ARQ IDs, independent of retained results.
 
 `GEMINI_TTS_SAMPLE_CONCURRENCY` controls Redis-backed provider slots across all
 API/ARQ processes (default `1`, valid `1..10`; use the same value for all
-workers). ARQ can hold ten jobs per worker while jobs wait for a provider slot.
-Waiting does not send Google requests; the 120-second provider deadline begins
-only after slot acquisition. Every sample permits exactly one outbound request.
-Operation IDs persist in asset generation metadata and correlate selection,
-enqueue, worker claim and final outcomes. No text, audio, credentials or signed
-URLs are logged.
+workers). A job that finds every slot busy does **not** wait inside its worker
+slot: it leaves the asset `queued` and reschedules itself a few seconds later
+(ARQ `Retry`), so a long batch cannot occupy the worker and delay unrelated
+jobs. Waiting never sends Google requests; the 120-second provider deadline
+begins only after a slot is acquired. Every sample permits exactly one outbound
+request. Operation IDs persist in asset generation metadata and correlate
+selection, enqueue, worker claim and final outcomes. No text, audio,
+credentials or signed URLs are logged.
+
+## Abandoned work: leases and recovery
+
+A worker claims an asset (`queued` → `running`) with a random claim token and a
+lease (180 s) that it renews while it works. Only the holder of the token may
+finalize the asset. A cron sweep (`recover_stranded_gemini_tts_samples`, every
+minute, safe to run on several workers at once) then repairs two failure cases:
+
+- **Worker died or stalled** (`running` with an expired lease): the asset becomes
+  `failed` with `error_message` beginning `worker_lost:` and its token is
+  cleared, so the old worker cannot finalize it later. It is deliberately **not**
+  re-run automatically, because the provider may already have been called and
+  billed; use the failed-only retry, which creates a new version. A healthy
+  (renewed) lease is never touched.
+- **Queue job lost** (`queued` for over two minutes with no live ARQ job, for
+  example after a Redis flush): the asset is re-enqueued under a new job ID
+  (`...-e{epoch}`). No provider request has happened, so this is safe. Only one
+  sweeper wins the epoch bump, so concurrent sweeps never double-enqueue.
+
+Recovery never changes the current playable version or earlier history. The
+additive migration `a9c3e5b7d1f2_add_gemini_tts_sample_leases` adds the claim
+token, lease, queue timestamp and enqueue epoch columns; a job still running
+under the previous release gets a ten-minute lease so it is not reaped mid-run.
+Deploy the API and the workers together, because the sweep and the claim
+protocol must agree.
+
+## Audio format and location
+
+The Vertex Gemini-TTS adapter checks the audio metadata Google returns with each
+chunk. It must describe raw 16-bit PCM, one channel, at the model's native rate
+(for example `audio/L16;codec=pcm;rate=24000`); anything else (a WAV container,
+another rate, stereo) fails the sample with a clear error rather than being
+stored or played as 24 kHz mono. When no metadata is sent the catalogue's
+per-model format applies. Sample generation always uses the platform API key, so
+it follows the same location rule as an API-key TTS slot: only `global` can be
+requested (a key resolves any other location from its account), and a pack for a
+regional location is rejected with the slot validator's message.
 
 The AVSIQ consumer can keep its existing bodyless retry call. Poll the pack,
 play only completed `is_current: true` assets, and use voice-level eligibility

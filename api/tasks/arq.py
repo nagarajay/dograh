@@ -12,7 +12,7 @@ from api.tasks.function_names import FunctionNames
 setup_logging()
 
 # Now import ARQ and task dependencies
-from arq import create_pool, cron, func
+from arq import create_pool, cron
 from arq.connections import ArqRedis, RedisSettings
 from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
@@ -61,8 +61,11 @@ from api.tasks.campaign_tasks import (
     process_campaign_batch,
     sync_campaign_source,
 )
+from api.tasks.gemini_tts_samples import (
+    GEMINI_SAMPLE_JOB,
+    recover_stranded_gemini_tts_samples,
+)
 from api.tasks.knowledge_base_processing import process_knowledge_base_document
-from api.tasks.gemini_tts_samples import generate_gemini_tts_sample
 from api.tasks.run_integrations import run_integrations_post_workflow_run
 from api.tasks.text_chat_inactivity import (
     complete_inactive_text_chat_session,
@@ -81,11 +84,19 @@ class WorkerSettings:
         process_knowledge_base_document,
         deliver_webhook,
         complete_inactive_text_chat_session,
-        # Includes waiting for the global sample slot; each provider call still
-        # has its own 120s deadline and exactly one outbound request.
-        func(generate_gemini_tts_sample, max_tries=1, timeout=4000),
+        # A job that finds every provider slot busy reschedules itself with
+        # ``Retry`` instead of waiting, so it never occupies a worker slot.
+        GEMINI_SAMPLE_JOB,
     ]
     cron_jobs = [
+        # Fails sample work abandoned by a dead worker and re-enqueues sample
+        # jobs lost from the queue. Safe to run on several workers at once.
+        cron(
+            recover_stranded_gemini_tts_samples,
+            second=0,
+            unique=True,
+            run_at_startup=False,
+        ),
         # Safety net for webhook deliveries whose ARQ job was lost (worker
         # restart / Redis flush): re-enqueue any pending delivery that is overdue.
         cron(

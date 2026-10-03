@@ -5,33 +5,34 @@ import wave
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import pytest
 from pipecat.frames.frames import TTSAudioRawFrame
 
 from api import constants
-from api.routes import gemini_tts_samples
-from api.routes import workflow_model_slots
-from api.routes import gemini_tts_samples
+from api.routes import gemini_tts_samples, workflow_model_slots
 from api.routes.workflow_model_slots import get_google_vertex_tts_catalog
 from api.schemas.gemini_tts_samples import GeminiTTSSamplePackCreateRequest
 from api.services import gemini_tts_sample_packs as packs
+from api.services.configuration.options.google_vertex_catalog import get_vertex_model
 from api.services.gemini_tts_sample_library import (
-    SampleGenerationProviderError,
     SampleGenerationNotConfigured,
+    SampleGenerationProviderError,
     pcm_to_wav,
     platform_sample_generation_config,
+    safe_provider_diagnostic,
     sample_pack_fingerprint,
     synthesize_sample_wav,
-    safe_provider_diagnostic,
     validate_pack_request,
 )
 from api.tasks import gemini_tts_samples as sample_tasks
 
 
 def test_provider_diagnostic_extracts_status_and_redacts_request_data():
-    error = RuntimeError("400 INVALID_ARGUMENT api_key=secret contents=private sample text")
+    error = RuntimeError(
+        "400 INVALID_ARGUMENT api_key=secret contents=private sample text"
+    )
     diagnostic = safe_provider_diagnostic(error, api_key="secret")
     assert diagnostic["status_code"] == 400
     assert diagnostic["category"] == "invalid_argument"
@@ -48,9 +49,11 @@ def test_provider_error_has_actionable_safe_shape():
 
 def test_sample_provider_timeout_is_bounded():
     assert sample_tasks.SAMPLE_PROVIDER_TIMEOUT_SECONDS < 300
-from api.services.auth.platform_admin import require_platform_admin
-from api.services import storage as storage_service
+
+
 from api.enums import StorageBackend
+from api.services import storage as storage_service
+from api.services.auth.platform_admin import require_platform_admin
 
 
 def test_pcm_is_browser_playable_wav_with_exact_duration():
@@ -65,9 +68,13 @@ def test_pcm_is_browser_playable_wav_with_exact_duration():
 
 def test_pack_fingerprint_changes_for_every_generation_input():
     base = dict(
-        provider="google_vertex", model_id="gemini-3.1-flash-tts-preview",
-        catalog_revision="rev-1", location="global", language="en-US",
-        style_text="warm", sample_text="hello",
+        provider="google_vertex",
+        model_id="gemini-3.1-flash-tts-preview",
+        catalog_revision="rev-1",
+        location="global",
+        language="en-US",
+        style_text="warm",
+        sample_text="hello",
     )
     assert sample_pack_fingerprint(**base) != sample_pack_fingerprint(
         **{**base, "sample_text": "different"}
@@ -87,10 +94,53 @@ def test_three_one_requires_global_and_current_catalog_revision():
     assert revision and len(voices) == 30
     with pytest.raises(ValueError, match="requires one of"):
         validate_pack_request(
-            model_id="gemini-3.1-flash-tts-preview", location="us",
-            catalog_revision=None, language="en-US", style_text="warm",
+            model_id="gemini-3.1-flash-tts-preview",
+            location="us",
+            catalog_revision=None,
+            language="en-US",
+            style_text="warm",
             sample_text="hello",
         )
+
+
+def test_sample_generation_follows_the_api_key_slot_location_contract():
+    """The platform key is an API key: only the global endpoint may be requested,
+    exactly as for an API-key TTS slot (a regional model location is documented
+    but cannot be selected with a key)."""
+    from api.services.configuration.options.google_vertex_catalog import (
+        gemini_tts_voices,
+        vertex_models,
+    )
+
+    regional = next(
+        m
+        for m in vertex_models("tts")
+        if get_vertex_model("tts", m).locations
+        and get_vertex_model("tts", m).locations != ("global",)
+    )
+    region = next(
+        loc for loc in get_vertex_model("tts", regional).locations if loc != "global"
+    )
+    with pytest.raises(ValueError, match="cannot choose a location"):
+        validate_pack_request(
+            model_id=regional,
+            location=region,
+            catalog_revision=None,
+            language="en-US",
+            style_text="warm",
+            sample_text="hello",
+        )
+    # The same model on the global endpoint, when the model offers it, is fine.
+    if "global" in get_vertex_model("tts", regional).locations:
+        revision, voices = validate_pack_request(
+            model_id=regional,
+            location="global",
+            catalog_revision=None,
+            language="en-US",
+            style_text="warm",
+            sample_text="hello",
+        )
+        assert revision and voices == gemini_tts_voices(regional)
 
 
 def test_generation_requires_platform_credential_and_never_uses_tenant_key(monkeypatch):
@@ -107,7 +157,9 @@ async def test_synthesis_frames_are_converted_without_a_google_call(monkeypatch)
     class FakeService:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
-            self._client = SimpleNamespace(aio=SimpleNamespace(aclose=AsyncMock()), close=lambda: None)
+            self._client = SimpleNamespace(
+                aio=SimpleNamespace(aclose=AsyncMock()), close=lambda: None
+            )
 
         async def _run_genai_tts(self, text, context_id):
             assert text == "hello" and context_id == "ctx"
@@ -118,10 +170,17 @@ async def test_synthesis_frames_are_converted_without_a_google_call(monkeypatch)
         FakeService,
     )
     wav_bytes, duration, metadata = await synthesize_sample_wav(
-        api_key="platform-only", project_id="project", location="global",
-        model_id="gemini-3.1-flash-tts-preview", voice_id="Kore",
-        language="en-US", style_text="warm", sample_text="hello", context_id="ctx",
-        sample_rate_hz=24000, channels=1,
+        api_key="platform-only",
+        project_id="project",
+        location="global",
+        model_id="gemini-3.1-flash-tts-preview",
+        voice_id="Kore",
+        language="en-US",
+        style_text="warm",
+        sample_text="hello",
+        context_id="ctx",
+        sample_rate_hz=24000,
+        channels=1,
     )
     assert duration == 1.0 and wav_bytes.startswith(b"RIFF")
     assert metadata["native_sample_rate_hz"] == 24000
@@ -142,9 +201,12 @@ def test_platform_catalog_requires_platform_admin_and_rejects_tenant_key(monkeyp
     client = TestClient(app)
 
     assert client.get("/superuser/gemini-tts/catalog").status_code == 401
-    assert client.get(
-        "/superuser/gemini-tts/catalog", headers={"X-API-Key": "tenant-key"}
-    ).status_code == 403
+    assert (
+        client.get(
+            "/superuser/gemini-tts/catalog", headers={"X-API-Key": "tenant-key"}
+        ).status_code
+        == 403
+    )
     response = client.get(
         "/superuser/gemini-tts/catalog",
         headers={"X-Platform-Admin-Key": "p" * 32},
@@ -159,9 +221,7 @@ def test_sample_pack_route_rejects_missing_platform_key(monkeypatch):
     monkeypatch.setattr(constants, "PLATFORM_ADMIN_API_KEY", "x" * 32)
     app = FastAPI()
     app.include_router(gemini_tts_samples.router)
-    response = TestClient(app).get(
-        "/superuser/gemini-tts/sample-packs/9001"
-    )
+    response = TestClient(app).get("/superuser/gemini-tts/sample-packs/9001")
     assert response.status_code == 401
 
 
@@ -174,7 +234,9 @@ def test_s3_backend_uses_configured_bucket_and_signing_options(monkeypatch):
 
     monkeypatch.setattr(storage_service, "S3FileSystem", FakeS3FileSystem)
     monkeypatch.setattr(storage_service, "S3_BUCKET", "avsiqvoiceagent")
-    monkeypatch.setattr(storage_service, "S3_ENDPOINT_URL", "https://storage.example.invalid/s3")
+    monkeypatch.setattr(
+        storage_service, "S3_ENDPOINT_URL", "https://storage.example.invalid/s3"
+    )
     monkeypatch.setattr(storage_service, "S3_SIGNATURE_VERSION", "s3v4")
     monkeypatch.setattr(storage_service, "S3_ADDRESSING_STYLE", "path")
 
@@ -200,7 +262,9 @@ async def test_playback_uses_one_hour_inline_signed_url(monkeypatch):
     )
     get_asset = AsyncMock(return_value=asset)
     signed_url = AsyncMock(return_value="https://storage.example.invalid/signed")
-    monkeypatch.setattr(gemini_tts_samples.db_client, "get_gemini_tts_sample_asset", get_asset)
+    monkeypatch.setattr(
+        gemini_tts_samples.db_client, "get_gemini_tts_sample_asset", get_asset
+    )
     monkeypatch.setattr(gemini_tts_samples.storage_fs, "aget_signed_url", signed_url)
 
     response = await gemini_tts_samples.get_gemini_tts_sample_playback_url(101, 202)
@@ -217,8 +281,7 @@ async def test_pack_creation_is_idempotent_and_does_not_requeue_existing(monkeyp
     monkeypatch.setattr(constants, "GEMINI_TTS_SAMPLE_PROJECT_ID", "project")
     monkeypatch.setattr(constants, "GEMINI_TTS_SAMPLE_LOCATION", "global")
     row = SimpleNamespace(
-        id=7,
-        assets=[SimpleNamespace(id=i, status="completed") for i in range(30)]
+        id=7, assets=[SimpleNamespace(id=i, status="completed") for i in range(30)]
     )
     fake_db = SimpleNamespace(
         create_or_get_pack=AsyncMock(return_value=(row, False)),
@@ -230,7 +293,10 @@ async def test_pack_creation_is_idempotent_and_does_not_requeue_existing(monkeyp
     monkeypatch.setattr(packs, "enqueue_job", enqueue)
     request = GeminiTTSSamplePackCreateRequest(
         model_id="gemini-3.1-flash-tts-preview",
-        location="global", language="en-US", style_text="warm", sample_text="hello",
+        location="global",
+        language="en-US",
+        style_text="warm",
+        sample_text="hello",
     )
     result, created = await packs.create_sample_pack(request)
     assert result is row and created is False
@@ -242,7 +308,11 @@ async def test_pack_creation_with_one_voice_queues_only_that_voice(monkeypatch):
     monkeypatch.setattr(constants, "GEMINI_TTS_SAMPLE_API_KEY", "platform-key")
     monkeypatch.setattr(constants, "GEMINI_TTS_SAMPLE_PROJECT_ID", "project")
     monkeypatch.setattr(constants, "GEMINI_TTS_SAMPLE_LOCATION", "global")
-    row = SimpleNamespace(assets=[SimpleNamespace(id=16, status="queued", voice_id="Kore")])
+    row = SimpleNamespace(
+        assets=[
+            SimpleNamespace(id=16, status="queued", voice_id="Kore", enqueue_epoch=0)
+        ]
+    )
     fake_db = SimpleNamespace(
         create_or_get_pack=AsyncMock(return_value=(row, True)),
         get_gemini_tts_sample_pack=AsyncMock(return_value=row),
@@ -254,8 +324,12 @@ async def test_pack_creation_with_one_voice_queues_only_that_voice(monkeypatch):
 
     result, created = await packs.create_sample_pack(
         GeminiTTSSamplePackCreateRequest(
-            model_id="gemini-3.1-flash-tts-preview", voice_id="Kore",
-            location="global", language="en-US", style_text="warm", sample_text="hello",
+            model_id="gemini-3.1-flash-tts-preview",
+            voice_id="Kore",
+            location="global",
+            language="en-US",
+            style_text="warm",
+            sample_text="hello",
         )
     )
 
@@ -267,17 +341,34 @@ async def test_pack_creation_with_one_voice_queues_only_that_voice(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_retry_reports_selected_and_enqueued_voice_operations(monkeypatch):
-    row = SimpleNamespace(model_id="gemini-3.1-flash-tts-preview", location="global",
-        catalog_revision=None, language="en-US", style_text="warm", sample_text="hello")
-    summary = dict(operation_id="op", eligible_voices=2, selected_voices=2,
-        skipped_playable_voices=1, skipped_active_voices=1, enqueued_jobs=0,
-        enqueue_conflicts=0, enqueue_failures=0, asset_ids=[11, 12], job_ids=[])
+    row = SimpleNamespace(
+        model_id="gemini-3.1-flash-tts-preview",
+        location="global",
+        catalog_revision=None,
+        language="en-US",
+        style_text="warm",
+        sample_text="hello",
+    )
+    summary = dict(
+        operation_id="op",
+        eligible_voices=2,
+        selected_voices=2,
+        skipped_playable_voices=1,
+        skipped_active_voices=1,
+        enqueued_jobs=0,
+        enqueue_conflicts=0,
+        enqueue_failures=0,
+        asset_ids=[11, 12],
+        job_ids=[],
+    )
     fake_db = SimpleNamespace(
         get_gemini_tts_sample_pack=AsyncMock(return_value=row),
         queue_failed_voice_recovery=AsyncMock(return_value=([11, 12], summary)),
     )
     monkeypatch.setattr(packs, "db_client", fake_db)
-    enqueue = AsyncMock(side_effect=[SimpleNamespace(job_id="new-11"), SimpleNamespace(job_id="new-12")])
+    enqueue = AsyncMock(
+        side_effect=[SimpleNamespace(job_id="new-11"), SimpleNamespace(job_id="new-12")]
+    )
     monkeypatch.setattr(packs, "enqueue_job", enqueue)
     retried, result = await packs.retry_failed_sample_pack(7, limit=2)
     assert retried is row and result["enqueued_jobs"] == 2
@@ -289,8 +380,13 @@ async def test_retry_reports_selected_and_enqueued_voice_operations(monkeypatch)
 @pytest.mark.asyncio
 async def test_individual_generation_enqueues_exactly_one_canonical_voice(monkeypatch):
     pack = SimpleNamespace(
-        id=7, model_id="gemini-3.1-flash-tts-preview", catalog_revision=None,
-        location="global", language="en-US", style_text="warm", sample_text="hello",
+        id=7,
+        model_id="gemini-3.1-flash-tts-preview",
+        catalog_revision=None,
+        location="global",
+        language="en-US",
+        style_text="warm",
+        sample_text="hello",
         assets=[],
     )
     asset = SimpleNamespace(id=41, voice_id="Kore", status="queued")
@@ -314,17 +410,30 @@ async def test_individual_generation_enqueues_exactly_one_canonical_voice(monkey
 
 
 @pytest.mark.asyncio
-async def test_completed_voice_requires_confirmation_and_regeneration_is_one_voice(monkeypatch):
+async def test_completed_voice_requires_confirmation_and_regeneration_is_one_voice(
+    monkeypatch,
+):
     pack = SimpleNamespace(
-        id=7, model_id="gemini-3.1-flash-tts-preview", catalog_revision=None,
-        location="global", language="en-US", style_text="warm", sample_text="hello",
+        id=7,
+        model_id="gemini-3.1-flash-tts-preview",
+        catalog_revision=None,
+        location="global",
+        language="en-US",
+        style_text="warm",
+        sample_text="hello",
         assets=[],
     )
-    old = SimpleNamespace(id=41, voice_id="Kore", status="completed", version=1, is_current=True)
-    new = SimpleNamespace(id=42, voice_id="Kore", status="queued", version=2, is_current=False)
+    old = SimpleNamespace(
+        id=41, voice_id="Kore", status="completed", version=1, is_current=True
+    )
+    new = SimpleNamespace(
+        id=42, voice_id="Kore", status="queued", version=2, is_current=False
+    )
     fake_db = SimpleNamespace(
         get_gemini_tts_sample_pack=AsyncMock(side_effect=[pack, pack, pack]),
-        queue_voice_generation=AsyncMock(side_effect=[(old, "regeneration_confirmation_required"), (new, None)]),
+        queue_voice_generation=AsyncMock(
+            side_effect=[(old, "regeneration_confirmation_required"), (new, None)]
+        ),
     )
     monkeypatch.setattr(packs, "db_client", fake_db)
     enqueue = AsyncMock()
@@ -342,10 +451,17 @@ async def test_completed_voice_requires_confirmation_and_regeneration_is_one_voi
 
 
 @pytest.mark.asyncio
-async def test_individual_generation_reports_existing_queue_without_enqueuing(monkeypatch):
+async def test_individual_generation_reports_existing_queue_without_enqueuing(
+    monkeypatch,
+):
     pack = SimpleNamespace(
-        id=7, model_id="gemini-3.1-flash-tts-preview", catalog_revision=None,
-        location="global", language="en-US", style_text="warm", sample_text="hello",
+        id=7,
+        model_id="gemini-3.1-flash-tts-preview",
+        catalog_revision=None,
+        location="global",
+        language="en-US",
+        style_text="warm",
+        sample_text="hello",
         assets=[],
     )
     fake_db = SimpleNamespace(
@@ -393,7 +509,9 @@ async def test_catalog_read_does_not_invoke_google(monkeypatch):
 @pytest.mark.asyncio
 async def test_platform_catalog_preserves_sample_filters(monkeypatch):
     lookup = AsyncMock(return_value=[])
-    monkeypatch.setattr(workflow_model_slots.db_client, "list_matching_completed_assets", lookup)
+    monkeypatch.setattr(
+        workflow_model_slots.db_client, "list_matching_completed_assets", lookup
+    )
 
     await workflow_model_slots.get_platform_gemini_tts_catalog(
         model="gemini-3.1-flash-tts-preview",
@@ -461,4 +579,7 @@ async def test_catalog_sample_lookup_matches_revision_and_location(monkeypatch):
     )
     assert response["models"][0]["catalog_revision"] == "be1fc646b9e6f5bc"
     assert response["models"][0]["voices"][15]["samples"][0]["location"] == "global"
-    assert response["models"][0]["voices"][15]["sample_url"] == "https://storage.invalid/sample.wav"
+    assert (
+        response["models"][0]["voices"][15]["sample_url"]
+        == "https://storage.invalid/sample.wav"
+    )

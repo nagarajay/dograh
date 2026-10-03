@@ -1,6 +1,7 @@
 """Persistence operations for platform-owned Gemini-TTS sample packs."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -9,6 +10,10 @@ from sqlalchemy.orm import selectinload
 from api.db.base_client import BaseDBClient
 from api.db.models import GeminiTTSSampleAssetModel, GeminiTTSSamplePackModel
 from api.services.configuration.options.google_vertex_catalog import gemini_tts_voices
+from api.services.gemini_tts_sample_jobs import (
+    CLAIM_LEASE_SECONDS,
+    EXPIRED_LEASE_MESSAGE,
+)
 
 
 class GeminiTTSSampleClient(BaseDBClient):
@@ -246,25 +251,39 @@ class GeminiTTSSampleClient(BaseDBClient):
     async def get_gemini_tts_sample_asset(self, asset_id: int):
         return await self.get_asset(asset_id)
 
-    async def claim_gemini_tts_sample_asset(self, asset_id: int) -> bool:
+    async def claim_gemini_tts_sample_asset(self, asset_id: int) -> str | None:
         return await self.claim_asset(asset_id)
 
     async def finish_gemini_tts_sample_asset(
-        self, asset_id: int, *, status: str, values: dict
-    ) -> None:
-        await self.finish_asset(asset_id, status=status, values=values)
+        self, asset_id: int, *, status: str, values: dict, claim_token: str
+    ) -> bool:
+        return await self.finish_asset(
+            asset_id, status=status, values=values, claim_token=claim_token
+        )
 
-    async def claim_asset(self, asset_id: int) -> bool:
-        async with self.async_session() as session:
-            pack = await session.scalar(
-                select(GeminiTTSSamplePackModel)
-                .join(
-                    GeminiTTSSampleAssetModel,
-                    GeminiTTSSampleAssetModel.pack_id == GeminiTTSSamplePackModel.id,
-                )
-                .where(GeminiTTSSampleAssetModel.id == asset_id)
-                .with_for_update(of=GeminiTTSSamplePackModel)
+    @staticmethod
+    async def _lock_pack_of(session, asset_id: int):
+        return await session.scalar(
+            select(GeminiTTSSamplePackModel)
+            .join(
+                GeminiTTSSampleAssetModel,
+                GeminiTTSSampleAssetModel.pack_id == GeminiTTSSamplePackModel.id,
             )
+            .where(GeminiTTSSampleAssetModel.id == asset_id)
+            .with_for_update(of=GeminiTTSSamplePackModel)
+        )
+
+    async def claim_asset(
+        self, asset_id: int, *, lease_seconds: int = CLAIM_LEASE_SECONDS
+    ) -> str | None:
+        """Move one ``queued`` asset to ``running`` and return its claim token.
+
+        Returns None when the asset is not queued (already claimed, finished or
+        compensated), so exactly one worker ever owns an asset version.
+        """
+        token = uuid4().hex
+        async with self.async_session() as session:
+            pack = await self._lock_pack_of(session, asset_id)
             result = await session.execute(
                 update(GeminiTTSSampleAssetModel)
                 .where(
@@ -275,52 +294,171 @@ class GeminiTTSSampleClient(BaseDBClient):
                     status="running",
                     attempts=GeminiTTSSampleAssetModel.attempts + 1,
                     error_message=None,
+                    claim_token=token,
+                    lease_expires_at=datetime.now(UTC)
+                    + timedelta(seconds=lease_seconds),
                 )
             )
             if pack is not None:
                 await self._refresh_progress(session, pack)
             await session.commit()
+            return token if result.rowcount == 1 else None
+
+    async def renew_asset_lease(
+        self,
+        asset_id: int,
+        claim_token: str,
+        *,
+        lease_seconds: int = CLAIM_LEASE_SECONDS,
+    ) -> bool:
+        """Extend the lease; False means the claim was replaced or ended."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                update(GeminiTTSSampleAssetModel)
+                .where(
+                    GeminiTTSSampleAssetModel.id == asset_id,
+                    GeminiTTSSampleAssetModel.status == "running",
+                    GeminiTTSSampleAssetModel.claim_token == claim_token,
+                )
+                .values(
+                    lease_expires_at=datetime.now(UTC)
+                    + timedelta(seconds=lease_seconds)
+                )
+            )
+            await session.commit()
             return result.rowcount == 1
 
-    async def finish_asset(self, asset_id: int, *, status: str, values: dict) -> None:
+    async def finish_asset(
+        self, asset_id: int, *, status: str, values: dict, claim_token: str
+    ) -> bool:
+        """Finalize a claimed asset. A stale worker (claim replaced) changes nothing.
+
+        Returns False, leaving the row untouched, unless the asset is still
+        ``running`` under ``claim_token``.
+        """
         async with self.async_session() as session:
-            pack = await session.scalar(
-                select(GeminiTTSSamplePackModel)
-                .join(
-                    GeminiTTSSampleAssetModel,
-                    GeminiTTSSampleAssetModel.pack_id == GeminiTTSSamplePackModel.id,
-                )
-                .where(GeminiTTSSampleAssetModel.id == asset_id)
-                .with_for_update(of=GeminiTTSSamplePackModel)
-            )
-            await session.execute(
+            pack = await self._lock_pack_of(session, asset_id)
+            owned = await session.execute(
                 update(GeminiTTSSampleAssetModel)
-                .where(GeminiTTSSampleAssetModel.id == asset_id)
-                .values(status=status, **values)
+                .where(
+                    GeminiTTSSampleAssetModel.id == asset_id,
+                    GeminiTTSSampleAssetModel.status == "running",
+                    GeminiTTSSampleAssetModel.claim_token == claim_token,
+                )
+                .values(
+                    status=status,
+                    claim_token=None,
+                    lease_expires_at=None,
+                    **values,
+                )
             )
+            if owned.rowcount != 1:
+                await session.rollback()
+                return False
             asset = await session.scalar(
                 select(GeminiTTSSampleAssetModel).where(
                     GeminiTTSSampleAssetModel.id == asset_id
                 )
             )
-            if asset:
-                if status == "completed":
-                    await session.execute(
-                        update(GeminiTTSSampleAssetModel)
-                        .where(
-                            GeminiTTSSampleAssetModel.pack_id == asset.pack_id,
-                            GeminiTTSSampleAssetModel.voice_id == asset.voice_id,
-                            GeminiTTSSampleAssetModel.id != asset.id,
-                        )
-                        .values(is_current=False)
+            if status == "completed":
+                await session.execute(
+                    update(GeminiTTSSampleAssetModel)
+                    .where(
+                        GeminiTTSSampleAssetModel.pack_id == asset.pack_id,
+                        GeminiTTSSampleAssetModel.voice_id == asset.voice_id,
+                        GeminiTTSSampleAssetModel.id != asset.id,
                     )
-                    await session.execute(
-                        update(GeminiTTSSampleAssetModel)
-                        .where(GeminiTTSSampleAssetModel.id == asset.id)
-                        .values(is_current=True)
-                    )
-                await self._refresh_progress(session, pack)
+                    .values(is_current=False)
+                )
+                await session.execute(
+                    update(GeminiTTSSampleAssetModel)
+                    .where(GeminiTTSSampleAssetModel.id == asset.id)
+                    .values(is_current=True)
+                )
+            await self._refresh_progress(session, pack)
             await session.commit()
+            return True
+
+    async def fail_expired_running_assets(self) -> list[int]:
+        """Fail ``running`` assets whose lease expired (worker died or stalled).
+
+        The provider may already have been called, so the asset is not silently
+        re-run: it becomes ``failed`` and an explicit retry creates a new
+        version. Clearing the token means the old worker can no longer finalize.
+        Idempotent; a healthy (renewed) lease is never touched.
+        """
+        async with self.async_session() as session:
+            ids = list(
+                (
+                    await session.scalars(
+                        select(GeminiTTSSampleAssetModel.id).where(
+                            GeminiTTSSampleAssetModel.status == "running",
+                            GeminiTTSSampleAssetModel.lease_expires_at
+                            < datetime.now(UTC),
+                        )
+                    )
+                ).all()
+            )
+        recovered: list[int] = []
+        for asset_id in ids:
+            async with self.async_session() as session:
+                pack = await self._lock_pack_of(session, asset_id)
+                # Re-check under the pack lock: the lease may have been renewed
+                # or the worker may have finished since the scan.
+                result = await session.execute(
+                    update(GeminiTTSSampleAssetModel)
+                    .where(
+                        GeminiTTSSampleAssetModel.id == asset_id,
+                        GeminiTTSSampleAssetModel.status == "running",
+                        GeminiTTSSampleAssetModel.lease_expires_at < datetime.now(UTC),
+                    )
+                    .values(
+                        status="failed",
+                        claim_token=None,
+                        lease_expires_at=None,
+                        error_message=EXPIRED_LEASE_MESSAGE,
+                    )
+                )
+                if result.rowcount == 1 and pack is not None:
+                    await self._refresh_progress(session, pack)
+                    recovered.append(asset_id)
+                await session.commit()
+        return recovered
+
+    async def list_stale_queued_assets(
+        self, *, older_than_seconds: int
+    ) -> list[tuple[int, int]]:
+        """``(asset_id, enqueue_epoch)`` of assets queued longer than the grace."""
+        async with self.async_session() as session:
+            rows = await session.execute(
+                select(
+                    GeminiTTSSampleAssetModel.id,
+                    GeminiTTSSampleAssetModel.enqueue_epoch,
+                ).where(
+                    GeminiTTSSampleAssetModel.status == "queued",
+                    GeminiTTSSampleAssetModel.queued_at
+                    < datetime.now(UTC) - timedelta(seconds=older_than_seconds),
+                )
+            )
+            return [(row[0], row[1]) for row in rows.all()]
+
+    async def bump_enqueue_epoch(self, asset_id: int, seen_epoch: int) -> int | None:
+        """Claim the right to re-enqueue a lost job; only one caller wins."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                update(GeminiTTSSampleAssetModel)
+                .where(
+                    GeminiTTSSampleAssetModel.id == asset_id,
+                    GeminiTTSSampleAssetModel.status == "queued",
+                    GeminiTTSSampleAssetModel.enqueue_epoch == seen_epoch,
+                )
+                .values(
+                    enqueue_epoch=seen_epoch + 1,
+                    queued_at=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+            return seen_epoch + 1 if result.rowcount == 1 else None
 
     async def queue_failed_voice_recovery(
         self,

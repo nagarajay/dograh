@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from arq import create_pool, func
+from arq import create_pool
 from arq.connections import RedisSettings
 from arq.worker import Worker
 from sqlalchemy import text, update
@@ -28,6 +28,7 @@ from api.services.configuration.options.google_vertex_catalog import (
     gemini_tts_catalog_revision,
     gemini_tts_voices,
 )
+from api.services.gemini_tts_sample_jobs import QUEUED_GRACE_SECONDS, sample_job_id
 from api.services.gemini_tts_sample_library import pcm_to_wav
 from api.tasks import gemini_tts_samples as tasks
 
@@ -68,6 +69,7 @@ async def live(monkeypatch):
     monkeypatch.setattr(tasks, "db_client", client)
     monkeypatch.setattr(packs, "enqueue_job", redis.enqueue_job)
     monkeypatch.setenv("GEMINI_TTS_SAMPLE_CONCURRENCY", "1")
+    monkeypatch.setattr(tasks, "SLOT_RETRY_DELAY_SECONDS", 0.05)
     yield client, redis
     await redis.aclose()
     await engine.dispose()
@@ -220,7 +222,7 @@ def fake_provider(monkeypatch):
 
 async def run_worker(redis):
     worker = Worker(
-        functions=[func(tasks.generate_gemini_tts_sample, max_tries=1, timeout=10)],
+        functions=[tasks.GEMINI_SAMPLE_JOB],
         redis_pool=redis,
         burst=True,
         handle_signals=False,
@@ -342,14 +344,19 @@ async def test_distributed_provider_limit_across_processes(live):
     code = """
 import asyncio, os
 from redis.asyncio import Redis
-from api.services.gemini_tts_sample_concurrency import sample_provider_slot
+from api.services.gemini_tts_sample_concurrency import ProviderSlotBusy, sample_provider_slot
 async def main():
  r = Redis.from_url(os.environ["REDIS_URL"])
- for _ in range(2):
-  async with sample_provider_slot(r):
-   await r.eval("local n=redis.call('incr',KEYS[1]); local m=tonumber(redis.call('get',KEYS[2]) or '0'); if n>m then redis.call('set',KEYS[2],n) end; return n",2,"test:active","test:max")
-   await asyncio.sleep(.2)
-   await r.decr("test:active")
+ done = 0
+ while done < 2:
+  try:
+   async with sample_provider_slot(r):
+    await r.eval("local n=redis.call('incr',KEYS[1]); local m=tonumber(redis.call('get',KEYS[2]) or '0'); if n>m then redis.call('set',KEYS[2],n) end; return n",2,"test:active","test:max")
+    await asyncio.sleep(.2)
+    await r.decr("test:active")
+   done += 1
+  except ProviderSlotBusy:
+   await asyncio.sleep(.05)
  await r.aclose()
 asyncio.run(main())
 """
@@ -382,13 +389,26 @@ async def test_authenticated_bodyless_bulk_route_limit_and_playback(live, monkey
     app = FastAPI()
     app.include_router(routes.router, prefix="/api/v1")
     monkeypatch.setattr(routes, "db_client", client)
-    monkeypatch.setattr(constants, "PLATFORM_ADMIN_API_KEY", "disposable-platform-admin-key-long-enough")
-    monkeypatch.setattr(routes, "storage_fs", SimpleNamespace(
-        aget_signed_url=AsyncMock(return_value="https://disposable-storage.test/audio")))
+    monkeypatch.setattr(
+        constants, "PLATFORM_ADMIN_API_KEY", "disposable-platform-admin-key-long-enough"
+    )
+    monkeypatch.setattr(
+        routes,
+        "storage_fs",
+        SimpleNamespace(
+            aget_signed_url=AsyncMock(
+                return_value="https://disposable-storage.test/audio"
+            )
+        ),
+    )
     path = f"/api/v1/superuser/gemini-tts/sample-packs/{pack_id}"
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as http:
         assert (await http.post(path + "/retry?limit=2")).status_code == 401
-        http.headers["X-Platform-Admin-Key"] = "disposable-platform-admin-key-long-enough"
+        http.headers["X-Platform-Admin-Key"] = (
+            "disposable-platform-admin-key-long-enough"
+        )
         assert (await http.post(path + "/retry?limit=0")).status_code == 422
         response = await http.post(path + "/retry?limit=2")
         assert response.status_code == 202
@@ -403,7 +423,9 @@ async def test_authenticated_bodyless_bulk_route_limit_and_playback(live, monkey
             assert playback.json()["url"] == "https://disposable-storage.test/audio"
 
 
-async def test_cancelled_bulk_request_compensates_unenqueued_reservations(live, monkeypatch):
+async def test_cancelled_bulk_request_compensates_unenqueued_reservations(
+    live, monkeypatch
+):
     client, redis = live
     pack_id = await seed(client, [asset("Achernar"), asset("Achird"), asset("Algenib")])
     calls = 0
@@ -423,3 +445,228 @@ async def test_cancelled_bulk_request_compensates_unenqueued_reservations(live, 
     assert await redis.zcard("arq:queue") == 1
     assert not await client.claim_asset(new[1].id)
     assert not await client.claim_asset(new[2].id)
+
+
+# ----------------------------------------------- lease, recovery, scheduling
+async def age(client, asset_id, *, lease=None, queued=None):
+    """Move an asset's lease/queue timestamps into the past, as time would."""
+    from datetime import UTC, datetime, timedelta
+
+    values = {}
+    if lease is not None:
+        values["lease_expires_at"] = datetime.now(UTC) - timedelta(seconds=lease)
+    if queued is not None:
+        values["queued_at"] = datetime.now(UTC) - timedelta(seconds=queued)
+    async with client.async_session() as session:
+        await session.execute(
+            update(Asset).where(Asset.id == asset_id).values(**values)
+        )
+        await session.commit()
+
+
+async def sweep(redis):
+    return await tasks.recover_stranded_gemini_tts_samples({"redis": redis})
+
+
+async def test_exactly_one_of_many_concurrent_claims_wins(live):
+    client, _ = live
+    pack_id = await seed(client, [asset("Achernar", status="queued")])
+    asset_id = (await client.get_pack(pack_id)).assets[0].id
+    tokens = await asyncio.gather(*(client.claim_asset(asset_id) for _ in range(8)))
+    assert len([t for t in tokens if t]) == 1
+    row = await client.get_asset(asset_id)
+    assert (row.status, row.attempts, row.claim_token) == (
+        "running",
+        1,
+        next(t for t in tokens if t),
+    )
+    assert row.lease_expires_at is not None
+
+
+async def test_dead_worker_is_recovered_and_cannot_finalize_later(live):
+    client, redis = live
+    pack_id = await seed(
+        client,
+        [
+            asset(
+                "Achernar",
+                1,
+                "completed",
+                True,
+                storage_key="keep.wav",
+                sha256="keep-hash",
+            ),
+            asset("Achernar", 2, "queued"),
+        ],
+    )
+    pack = await client.get_pack(pack_id)
+    regen = pack.assets[1]
+    old_worker = await client.claim_asset(regen.id)
+    await age(client, regen.id, lease=5)  # the worker died; nobody renewed
+    result = await sweep(redis)
+    assert result["expired_running"] == [regen.id]
+    row = await client.get_asset(regen.id)
+    assert (row.status, row.claim_token, row.lease_expires_at) == ("failed", None, None)
+    assert row.error_message.startswith("worker_lost")
+    # The dead (or merely stalled) worker wakes up and tries to finish: refused.
+    assert not await client.finish_gemini_tts_sample_asset(
+        regen.id,
+        status="completed",
+        values={"storage_key": "late.wav", "sha256": "late"},
+        claim_token=old_worker,
+    )
+    row = await client.get_asset(regen.id)
+    assert (row.status, row.storage_key, row.is_current) == ("failed", None, False)
+    # Current playable audio and history are untouched; the pack still plays.
+    pack = await client.get_pack(pack_id)
+    current = [a for a in pack.assets if a.is_current]
+    assert [(a.id, a.storage_key, a.sha256) for a in current] == [
+        (pack.assets[0].id, "keep.wav", "keep-hash")
+    ]
+    assert pack.status == "partial"  # one voice playable of thirty
+    # Recovery is idempotent.
+    assert (await sweep(redis))["expired_running"] == []
+    # An explicit retry makes a new version instead of reusing the failed one.
+    await client.queue_voice_generation(
+        pack_id, voice_id="Achernar", gender="Female", regenerate=True
+    )
+    versions = sorted(a.version for a in (await client.get_pack(pack_id)).assets)
+    assert versions == [1, 2, 3]
+
+
+async def test_healthy_lease_is_never_reclaimed_and_renewal_extends_it(live):
+    client, redis = live
+    pack_id = await seed(client, [asset("Achernar", status="queued")])
+    asset_id = (await client.get_pack(pack_id)).assets[0].id
+    token = await client.claim_asset(asset_id, lease_seconds=60)
+    assert (await sweep(redis))["expired_running"] == []
+    assert (await client.get_asset(asset_id)).status == "running"
+    await age(client, asset_id, lease=1)
+    assert await client.renew_asset_lease(
+        asset_id, token, lease_seconds=60
+    )  # heartbeat arrived
+    assert (await sweep(redis))["expired_running"] == []
+    assert not await client.renew_asset_lease(asset_id, "someone-else")
+    assert await client.finish_gemini_tts_sample_asset(
+        asset_id, status="failed", values={"error_message": "x"}, claim_token=token
+    )
+
+
+async def test_concurrent_sweeps_recover_each_asset_once(live):
+    client, redis = live
+    pack_id = await seed(
+        client,
+        [
+            asset("Achernar", status="running"),
+            asset("Achird", status="queued"),
+            asset("Algenib"),
+        ],
+    )
+    assets = (await client.get_pack(pack_id)).assets
+    await age(client, assets[0].id, lease=5)
+    await age(client, assets[1].id, queued=QUEUED_GRACE_SECONDS + 5)
+    results = await asyncio.gather(sweep(redis), sweep(redis), sweep(redis))
+    assert sum(len(r["expired_running"]) for r in results) == 1
+    assert sum(len(r["requeued"]) for r in results) == 1
+    assert await redis.zcard("arq:queue") == 1
+    queued = await client.get_asset(assets[1].id)
+    assert queued.enqueue_epoch == 1
+    # Run again: the re-enqueued job is alive, so nothing more happens.
+    again = await sweep(redis)
+    assert again == {"expired_running": [], "requeued": []}
+
+
+async def test_lost_queue_job_is_re_enqueued_and_then_completes(live, monkeypatch):
+    client, redis = live
+    pack_id = await seed(client, [asset("Achernar", status="queued")])
+    asset_id = (await client.get_pack(pack_id)).assets[0].id
+    # Within the grace period (enqueue may still be in flight): left alone.
+    assert (await sweep(redis))["requeued"] == []
+    await age(client, asset_id, queued=QUEUED_GRACE_SECONDS + 5)
+    assert await redis.zcard("arq:queue") == 0  # the job was lost
+    assert (await sweep(redis))["requeued"] == [asset_id]
+    assert await redis.exists("arq:job:" + sample_job_id(asset_id, 1))
+    synth, _ = fake_provider(monkeypatch)
+    await run_worker(redis)
+    row = await client.get_asset(asset_id)
+    assert (row.status, row.is_current, row.attempts) == ("completed", True, 1)
+    assert synth.await_count == 1
+
+
+async def test_finished_job_result_does_not_hide_a_still_queued_asset(live):
+    client, redis = live
+    pack_id = await seed(client, [asset("Achernar", status="queued")])
+    asset_id = (await client.get_pack(pack_id)).assets[0].id
+    await redis.set("arq:result:" + sample_job_id(asset_id), b"retained", ex=60)
+    await age(client, asset_id, queued=QUEUED_GRACE_SECONDS + 5)
+    assert (await sweep(redis))["requeued"] == [asset_id]
+
+
+async def test_busy_provider_defers_without_occupying_workers(live, monkeypatch):
+    """Jobs that find the provider busy must free their ARQ slot and finish later."""
+    import time
+
+    from arq import func
+    from arq.worker import Worker
+
+    client, redis = live
+    monkeypatch.setattr(tasks, "SLOT_RETRY_DELAY_SECONDS", 0.3)
+    pack_id = await seed(
+        client, [asset(v, status="queued") for v in ("Achernar", "Achird", "Algenib")]
+    )
+    ids = [a.id for a in (await client.get_pack(pack_id)).assets]
+    synth, _ = fake_provider(monkeypatch)
+    await redis.set("gemini-tts-samples:provider-slot:0", "other-process", ex=3)
+    for asset_id in ids:
+        await redis.enqueue_job(
+            "generate_gemini_tts_sample", asset_id, _job_id=sample_job_id(asset_id)
+        )
+    quick_done = {}
+
+    async def unrelated(ctx):
+        quick_done["at"] = time.monotonic()
+
+    await redis.enqueue_job("unrelated")
+    started = time.monotonic()
+    # max_jobs equals the number of waiting sample jobs: with the old busy-wait
+    # they would hold every slot and ``unrelated`` would only run after ~3 s.
+    worker = Worker(
+        functions=[tasks.GEMINI_SAMPLE_JOB, func(unrelated, name="unrelated")],
+        redis_pool=redis,
+        burst=True,
+        handle_signals=False,
+        max_jobs=3,
+        poll_delay=0.05,
+    )
+    await worker.async_run()
+    assert quick_done["at"] - started < 1.5
+    assert worker.jobs_failed == 0
+    pack = await client.get_pack(pack_id)
+    assert [a.status for a in pack.assets] == ["completed"] * 3
+    assert synth.await_count == 3
+    assert {a.attempts for a in pack.assets} == {1}
+
+
+async def test_lost_lease_cancels_provider_work(monkeypatch):
+    from api.services import gemini_tts_sample_concurrency as concurrency
+
+    class FakeRedis:
+        async def set(self, *a, **k):
+            return True
+
+        async def eval(self, *a, **k):
+            return 1
+
+    monkeypatch.setattr(concurrency, "LEASE_SECONDS", 0.3)
+
+    async def lost():
+        return False
+
+    cancelled = False
+    try:
+        async with concurrency.sample_provider_slot(FakeRedis()) as slot:
+            slot.watch(lost)
+            await asyncio.sleep(5)
+    except asyncio.CancelledError:
+        cancelled = True
+    assert cancelled

@@ -220,8 +220,7 @@ class APIKeyModel(Base):
             "organization_id",
             unique=True,
             postgresql_where=text(
-                "name = 'platform-provisioning' AND is_active "
-                "AND archived_at IS NULL"
+                "name = 'platform-provisioning' AND is_active AND archived_at IS NULL"
             ),
         ),
     )
@@ -1505,6 +1504,10 @@ class GeminiTTSSamplePackModel(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
+    __table_args__ = (
+        Index("ix_gemini_tts_sample_packs_model_status", "model_id", "status"),
+    )
+
     assets = relationship(
         "GeminiTTSSampleAssetModel",
         back_populates="pack",
@@ -1534,10 +1537,21 @@ class GeminiTTSSampleAssetModel(Base):
     mime_type = Column(String(64), nullable=True)
     duration_seconds = Column(Float, nullable=True)
     sha256 = Column(String(64), nullable=True)
-    generation_metadata = Column(JSON, nullable=False, default=dict, server_default=text("'{}'::json"))
+    generation_metadata = Column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'::json")
+    )
     error_message = Column(Text, nullable=True)
     attempts = Column(Integer, nullable=False, server_default="0")
     generated_at = Column(DateTime(timezone=True), nullable=True)
+    # Claim ownership: only the worker holding ``claim_token`` may finalize a
+    # ``running`` asset, and only until ``lease_expires_at``.
+    claim_token = Column(String(32), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    queued_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    # Part of the ARQ job id; bumped when a lost queue job is re-enqueued.
+    enqueue_epoch = Column(Integer, nullable=False, server_default="0")
 
     pack = relationship("GeminiTTSSamplePackModel", back_populates="assets")
 
@@ -1547,12 +1561,16 @@ class GeminiTTSSampleAssetModel(Base):
         ),
         Index(
             "uq_gemini_tts_sample_asset_current",
-            "pack_id", "voice_id", unique=True,
+            "pack_id",
+            "voice_id",
+            unique=True,
             postgresql_where=text("is_current"),
         ),
         Index(
             "uq_gemini_tts_sample_asset_active",
-            "pack_id", "voice_id", unique=True,
+            "pack_id",
+            "voice_id",
+            unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
         ),
         Index("ix_gemini_tts_sample_assets_pack_id", "pack_id"),

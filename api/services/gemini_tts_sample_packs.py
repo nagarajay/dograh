@@ -10,6 +10,7 @@ from api.schemas.gemini_tts_samples import (
     GeminiTTSSamplePackCreateRequest,
     GeminiTTSSampleVoiceGenerationRequest,
 )
+from api.services.gemini_tts_sample_jobs import sample_job_id
 from api.services.gemini_tts_sample_library import (
     platform_sample_generation_config,
     sample_pack_fingerprint,
@@ -82,7 +83,7 @@ async def create_sample_pack(request: GeminiTTSSamplePackCreateRequest):
             await enqueue_job(
                 FunctionNames.GENERATE_GEMINI_TTS_SAMPLE,
                 asset.id,
-                _job_id=f"gemini-tts-sample-asset-{asset.id}",
+                _job_id=sample_job_id(asset.id, asset.enqueue_epoch),
             )
     return row, created
 
@@ -101,7 +102,7 @@ async def _enqueue_sample_asset(asset_id: int):
         job = await enqueue_job(
             FunctionNames.GENERATE_GEMINI_TTS_SAMPLE,
             asset_id,
-            _job_id=f"gemini-tts-sample-asset-{asset_id}",
+            _job_id=sample_job_id(asset_id),
         )
     except Exception:  # noqa: BLE001 - compensate all queue acceptance failures
         await db_client.fail_sample_enqueue(asset_id)
@@ -136,20 +137,27 @@ async def retry_failed_sample_pack(pack_id: int, *, limit: int | None = None):
         for index, asset_id in enumerate(asset_ids):
             outcome, job_id = await _enqueue_sample_asset(asset_id)
             summary[
-                {"enqueued": "enqueued_jobs", "conflict": "enqueue_conflicts",
-                 "failure": "enqueue_failures"}[outcome]
+                {
+                    "enqueued": "enqueued_jobs",
+                    "conflict": "enqueue_conflicts",
+                    "failure": "enqueue_failures",
+                }[outcome]
             ] += 1
             if job_id:
                 summary["job_ids"].append(job_id)
             logger.info(
                 "Gemini bulk retry enqueue operation_id={} asset_id={} outcome={} job_id={}",
-                summary["operation_id"], asset_id, outcome, job_id,
+                summary["operation_id"],
+                asset_id,
+                outcome,
+                job_id,
             )
     except asyncio.CancelledError:
         # A cancelled request must not strand the not-yet-enqueued reservations.
         async def compensate():
             for pending_id in asset_ids[index:]:
                 await db_client.fail_sample_enqueue(pending_id)
+
         await asyncio.shield(compensate())
         raise
     logger.info("Gemini bulk retry scheduled pack_id={} summary={}", pack_id, summary)
