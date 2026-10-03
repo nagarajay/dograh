@@ -71,7 +71,11 @@ async def _build_google_vertex_tts_catalog(
         for model_id in model_ids:
             for pack, asset in await db_client.list_matching_completed_assets(
                 model_id=model_id,
-                catalog_revision=catalog_revision,
+                # A sample belongs to one model *and* one catalog revision: when
+                # the caller does not pin a revision, only the model's current
+                # one is offered, never a sample from a superseded catalog.
+                catalog_revision=catalog_revision
+                or gemini_tts_catalog_revision(model_id),
                 location=location,
                 language=language,
                 style_text=context,

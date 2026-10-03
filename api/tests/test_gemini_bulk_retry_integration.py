@@ -670,3 +670,79 @@ async def test_lost_lease_cancels_provider_work(monkeypatch):
     except asyncio.CancelledError:
         cancelled = True
     assert cancelled
+
+
+# ------------------------------------------- individual recovery of one voice
+def _request(regenerate):
+    from api.schemas.gemini_tts_samples import GeminiTTSSampleVoiceGenerationRequest
+
+    return GeminiTTSSampleVoiceGenerationRequest(regenerate=regenerate)
+
+
+async def _snapshot(client, pack_id):
+    return {
+        a.id: (a.voice_id, a.version, a.status, a.is_current, a.storage_key, a.sha256)
+        for a in (await client.get_pack(pack_id)).assets
+    }
+
+
+async def test_retrying_one_failed_voice_leaves_every_other_voice_untouched(live):
+    client, redis = live
+    pack_id = await seed(
+        client,
+        [
+            asset("Achernar", 1, "completed", True, storage_key="a.wav", sha256="a"),
+            asset("Achird"),  # failed
+            asset("Algenib"),  # failed
+            asset("Algieba", 1, "completed", True, storage_key="g.wav", sha256="g"),
+        ],
+    )
+    before = await _snapshot(client, pack_id)
+    pack, new = await packs.generate_sample_voice(pack_id, "Achird", _request(True))
+    after = await _snapshot(client, pack_id)
+    # Exactly one new queued version, for the retried voice only.
+    added = {k: v for k, v in after.items() if k not in before}
+    assert list(added.values()) == [("Achird", 2, "queued", False, None, None)]
+    assert new.id in added
+    # Every pre-existing row, including the other failed voice and the playable
+    # samples, is byte-for-byte unchanged.
+    assert {k: after[k] for k in before} == before
+    assert await redis.zcard("arq:queue") == 1
+
+
+async def test_repeated_or_multi_tab_retry_creates_exactly_one_generation(live):
+    client, redis = live
+    pack_id = await seed(client, [asset("Achird"), asset("Achernar", 1, "completed", True, storage_key="a.wav")])
+    # Six tabs press Retry at the same moment.
+    results = await asyncio.gather(
+        *(packs.generate_sample_voice(pack_id, "Achird", _request(True)) for _ in range(6)),
+        return_exceptions=True,
+    )
+    accepted = [r for r in results if not isinstance(r, BaseException)]
+    refused = [r for r in results if isinstance(r, RuntimeError)]
+    assert len(accepted) == 1 and len(refused) == 5
+    assert all("already" in str(r) for r in refused)
+    versions = [a.version for a in (await client.get_pack(pack_id)).assets if a.voice_id == "Achird"]
+    assert sorted(versions) == [1, 2]
+    assert await redis.zcard("arq:queue") == 1
+    # A later click while it is generating is also refused, not queued again.
+    with pytest.raises(RuntimeError, match="already"):
+        await packs.generate_sample_voice(pack_id, "Achird", _request(True))
+
+
+async def test_a_failed_retry_can_be_retried_again_and_success_replaces_nothing(live, monkeypatch):
+    client, redis = live
+    pack_id = await seed(client, [asset("Achird"), asset("Achernar", 1, "completed", True, storage_key="a.wav", sha256="a")])
+    synth, _ = fake_provider(monkeypatch)
+    synth.side_effect = RuntimeError("test provider unavailable")
+    await packs.generate_sample_voice(pack_id, "Achird", _request(True))
+    await run_worker(redis)
+    assert [a.status for a in (await client.get_pack(pack_id)).assets if a.voice_id == "Achird"] == ["failed", "failed"]
+    synth.side_effect = None
+    await packs.generate_sample_voice(pack_id, "Achird", _request(True))
+    await run_worker(redis)
+    pack = await client.get_pack(pack_id)
+    achird = [a for a in pack.assets if a.voice_id == "Achird"]
+    assert [a.status for a in achird] == ["failed", "failed", "completed"] and achird[-1].is_current
+    ach = next(a for a in pack.assets if a.voice_id == "Achernar")
+    assert (ach.status, ach.is_current, ach.storage_key, ach.sha256) == ("completed", True, "a.wav", "a")

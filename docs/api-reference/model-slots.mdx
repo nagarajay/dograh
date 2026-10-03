@@ -122,6 +122,8 @@ This route accepts the same query filters and returns the same response model.
 It rejects `X-API-Key` tenant credentials; never send either platform or
 Google generation credentials to the browser.
 
+Stored samples are matched to the selected model, language, context and spoken text, and to one catalog revision: when `catalog_revision` is omitted only the model's current revision is used, so a sample from a superseded catalog is never offered as the current one.
+
 The response is read-only and lists the exact supported model IDs, a stable
 `catalog_revision` for each model, documented
 locations, lifecycle, raw output format, voice IDs, and Google’s documented

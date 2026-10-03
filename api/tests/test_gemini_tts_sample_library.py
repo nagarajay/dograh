@@ -583,3 +583,32 @@ async def test_catalog_sample_lookup_matches_revision_and_location(monkeypatch):
         response["models"][0]["voices"][15]["sample_url"]
         == "https://storage.invalid/sample.wav"
     )
+
+
+@pytest.mark.asyncio
+async def test_catalog_offers_only_the_current_revision_when_none_is_pinned(monkeypatch):
+    """A voice's sample must belong to the selected model and its current catalog
+    revision, never to a superseded revision that shares the same text."""
+    from api.services.configuration.options.google_vertex_catalog import (
+        gemini_tts_catalog_revision,
+    )
+
+    lookup = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        workflow_model_slots.db_client, "list_matching_completed_assets", lookup
+    )
+
+    await get_google_vertex_tts_catalog(
+        model="gemini-3.1-flash-tts-preview",
+        catalog_revision=None,
+        location=None,
+        language="en-US",
+        context="warm",
+        sample_text="hello",
+        user=SimpleNamespace(),
+    )
+
+    assert lookup.await_args.kwargs["model_id"] == "gemini-3.1-flash-tts-preview"
+    assert lookup.await_args.kwargs["catalog_revision"] == gemini_tts_catalog_revision(
+        "gemini-3.1-flash-tts-preview"
+    )
