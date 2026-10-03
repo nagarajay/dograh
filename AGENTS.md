@@ -42,3 +42,12 @@ source venv/bin/activate && set -a && source api/.env.test && set +a && python -
 # Backend scripts
 source venv/bin/activate && set -a && source api/.env && set +a && python -m scripts.dump_docs_openapi
 ```
+
+Without a host virtualenv (for example Intel macOS, where the pipecat extras do not install), run the same suite in a disposable container with its own Postgres and Redis:
+
+```bash
+scripts/test_api_in_docker.sh                          # whole API suite, including the real-Postgres/Redis bulk-retry tests
+scripts/test_api_in_docker.sh tests/test_ts_bridge.py  # chosen tests (paths relative to api/)
+```
+
+It stages the repository layout (some tests read `docker-compose.yaml` relative to `api/tests`) and needs docker, rsync and node/npm on the host. It never touches development services or data.

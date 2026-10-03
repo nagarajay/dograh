@@ -1,6 +1,10 @@
 """Real Postgres constraints and ARQ Redis semantics; isolated disposable services only.
 
-Run with GEMINI_BULK_INTEGRATION=1 and gemini-bulk-postgres/gemini-bulk-redis.
+Run with GEMINI_BULK_INTEGRATION=1 and a disposable Postgres and Redis reachable
+as gemini-bulk-postgres / gemini-bulk-redis (override with
+GEMINI_BULK_DATABASE_URL / GEMINI_BULK_REDIS_URL). These are separate from the
+suite's own DATABASE_URL/REDIS_URL, so a single full run can include them;
+scripts/test_api_in_docker.sh sets everything up.
 Provider and storage calls are substituted; live deployment verifies those boundaries.
 """
 
@@ -39,6 +43,10 @@ pytestmark = [
         reason="disposable integration services required",
     ),
 ]
+BULK_DATABASE_URL = os.getenv(
+    "GEMINI_BULK_DATABASE_URL", "postgresql+asyncpg://t:t@gemini-bulk-postgres:5432/t"
+)
+BULK_REDIS_URL = os.getenv("GEMINI_BULK_REDIS_URL", "redis://gemini-bulk-redis:6379")
 MODEL = "gemini-3.1-flash-tts-preview"
 VOICES = [{"voice_id": v.id, "gender": v.gender} for v in gemini_tts_voices(MODEL)]
 
@@ -46,9 +54,9 @@ VOICES = [{"voice_id": v.id, "gender": v.gender} for v in gemini_tts_voices(MODE
 @pytest.fixture
 async def live(monkeypatch):
     # Never run destructive fixture setup against the development Supabase DB.
-    assert "@gemini-bulk-postgres:" in os.environ["DATABASE_URL"]
-    assert os.environ["REDIS_URL"] == "redis://gemini-bulk-redis:6379"
-    engine = create_async_engine(os.environ["DATABASE_URL"], poolclass=NullPool)
+    assert "@gemini-bulk-postgres:" in BULK_DATABASE_URL
+    assert BULK_REDIS_URL == "redis://gemini-bulk-redis:6379"
+    engine = create_async_engine(BULK_DATABASE_URL, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(
             lambda c: Pack.metadata.create_all(
@@ -346,7 +354,7 @@ import asyncio, os
 from redis.asyncio import Redis
 from api.services.gemini_tts_sample_concurrency import ProviderSlotBusy, sample_provider_slot
 async def main():
- r = Redis.from_url(os.environ["REDIS_URL"])
+ r = Redis.from_url(os.environ["GEMINI_BULK_REDIS_URL"])
  done = 0
  while done < 2:
   try:
@@ -365,6 +373,7 @@ asyncio.run(main())
             sys.executable,
             "-c",
             code,
+            env={**os.environ, "GEMINI_BULK_REDIS_URL": BULK_REDIS_URL},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
