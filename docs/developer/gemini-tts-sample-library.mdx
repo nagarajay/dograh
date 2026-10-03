@@ -75,7 +75,7 @@ be inspected or played with:
 The model-slot catalog also returns only the current completed sample for each
 voice by default.
 
-## 5. Recover failed voices only
+## 5. Recover failed voices only (pack-level, optional)
 
 `POST /sample-packs/{pack_id}/retry` accepts no body and returns `202` with the
 existing pack response. It creates exactly one new immutable version for each
@@ -173,3 +173,17 @@ The AVSIQ consumer can keep its existing bodyless retry call. Poll the pack,
 play only completed `is_current: true` assets, and use voice-level eligibility
 (or derive it from version history) to control the retry button. Do not use
 `failed_assets` to label a fully playable pack as broken or offer recovery.
+
+## Super-admin page behaviour
+
+The Dograh super-admin page (`/superadmin/gemini-tts`) deliberately shows one
+state per voice: **Ready** (plays the current sample), **Generating…**, **Failed**
+with a per-voice **Retry**, or **Not generated** with **Generate**. Retry sends
+`regenerate: true` for that voice only, so every other voice and every playable
+sample is untouched; a duplicate request (repeated click or another tab) is
+refused with `409 already queued/running` and shown as "already generating".
+Versions, attempts and the pack-wide retry are not shown in the page. They
+remain in the API and database (history is never deleted), and the pack-level
+`POST .../retry` endpoint stays available for bulk recovery by other callers.
+Only samples of the selected provider and model are listed, so a previous
+selection's audio is never presented as the current one.

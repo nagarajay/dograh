@@ -7,7 +7,6 @@ import {
     generateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePost,
     getGeminiTtsSamplePlaybackUrlApiV1SuperuserGeminiTtsSamplePacksPackIdAssetsAssetIdPlaybackUrlGet,
     listGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGet,
-    retryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPost,
 } from "@/client/sdk.gen";
 import type {
     GeminiTtsSampleAssetResponse,
@@ -24,8 +23,30 @@ import { describeSampleError } from "./sampleErrors";
 const FORM_FIELDS = ["model_id", "voice_id", "location", "language", "style_text", "sample_text"] as const;
 type FormKey = (typeof FORM_FIELDS)[number];
 
-const isActive = (asset?: GeminiTtsSampleAssetResponse) =>
-    asset?.status === "queued" || asset?.status === "running";
+const PROVIDER = "google_vertex";
+const PROVIDER_LABEL = "Google Vertex AI";
+const POLL_MS = 4000;
+
+type VoiceState =
+    | { kind: "generating" }
+    | { kind: "ready"; asset: GeminiTtsSampleAssetResponse }
+    | { kind: "failed"; message: string }
+    | { kind: "none" };
+
+/**
+ * One answer per voice: is its sample generated? Internal versions and attempts
+ * are not shown. A playable sample always wins (a replacement that is running
+ * or failed must not hide audio that still plays); otherwise the latest attempt
+ * decides.
+ */
+function voiceState(versions: GeminiTtsSampleAssetResponse[]): VoiceState {
+    const current = versions.find((asset) => asset.is_current && asset.status === "completed");
+    if (current) return { kind: "ready", asset: current };
+    const latest = versions[versions.length - 1];
+    if (latest?.status === "queued" || latest?.status === "running") return { kind: "generating" };
+    if (latest?.status === "failed") return { kind: "failed", message: latest.error_message || "Generation failed" };
+    return { kind: "none" };
+}
 
 export default function GeminiTtsSamplesPage() {
     const auth = useAuth();
@@ -39,6 +60,9 @@ export default function GeminiTtsSamplesPage() {
         sample_text: "Hello, this is a voice sample.",
     });
     const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null);
+    // Voices with a request in flight in this tab: a second click is ignored
+    // here, and the server refuses a duplicate from another tab.
+    const [busy, setBusy] = useState<Set<string>>(new Set());
     // Signed URLs expire after an hour: a fresh one replaces a stale one on error.
     const [freshUrls, setFreshUrls] = useState<Record<number, string>>({});
 
@@ -56,6 +80,17 @@ export default function GeminiTtsSamplesPage() {
         load().catch(fail);
     }, [auth.isAuthenticated, load]);
 
+    const anyGenerating = packs.some((pack) =>
+        Array.from(new Set(pack.assets.map((asset) => asset.voice_id))).some(
+            (voiceId) => voiceState(pack.assets.filter((asset) => asset.voice_id === voiceId)).kind === "generating",
+        ),
+    );
+    useEffect(() => {
+        if (!anyGenerating) return;
+        const timer = setInterval(() => load().catch(() => undefined), POLL_MS);
+        return () => clearInterval(timer);
+    }, [anyGenerating, load]);
+
     const createPack = async (event: React.FormEvent) => {
         event.preventDefault();
         const voice = form.voice_id.trim();
@@ -64,57 +99,45 @@ export default function GeminiTtsSamplesPage() {
                 body: { ...form, voice_id: voice || undefined },
             });
             if (response.error) throw new Error(describeSampleError(response.error));
-            setMessage({ text: voice ? `${voice} queued.` : "Batch generation queued.", isError: false });
+            setMessage({ text: voice ? `${voice} is generating.` : "Batch generation started.", isError: false });
             await load();
         } catch (error) {
             fail(error);
         }
     };
 
-    const generate = async (pack: GeminiTtsSamplePackResponse, voiceId: string, regenerate: boolean) => {
-        if (
-            regenerate &&
-            !window.confirm("Regenerate this one voice? This sends a new Google TTS request and may incur usage.")
-        ) {
-            return;
-        }
+    // Generate a voice that has no sample, or retry one whose generation failed.
+    // Only that voice is requested: other voices, and their playable samples,
+    // are never touched. (The API takes regenerate=true for a failed voice.)
+    const generate = async (pack: GeminiTtsSamplePackResponse, voiceId: string, isRetry: boolean) => {
+        const key = `${pack.id}:${voiceId}`;
+        if (busy.has(key)) return;
+        setBusy((current) => new Set(current).add(key));
         try {
             const response =
                 await generateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePost({
                     path: { pack_id: pack.id, voice_id: voiceId },
-                    body: { regenerate },
+                    body: { regenerate: isRetry },
                 });
-            if (response.error) throw new Error(describeSampleError(response.error));
-            setMessage({ text: `${voiceId} queued.`, isError: false });
+            if (response.error) {
+                if (response.response?.status === 409) {
+                    // Another tab (or an earlier click) already started it.
+                    setMessage({ text: `${voiceId} is already generating.`, isError: false });
+                    await load();
+                    return;
+                }
+                throw new Error(describeSampleError(response.error));
+            }
+            setMessage({ text: `${voiceId} is generating.`, isError: false });
             await load();
         } catch (error) {
             fail(error);
-        }
-    };
-
-    // Failed voices are recovered by the pack-level retry (the API refuses a
-    // plain per-voice generate for them), which only touches failed voices and
-    // never replaces a playable sample.
-    const retryFailed = async (pack: GeminiTtsSamplePackResponse) => {
-        const count = pack.eligible_voices ?? 0;
-        if (
-            !window.confirm(
-                `Retry ${count} failed voice${count === 1 ? "" : "s"}? Each sends a new Google TTS request and may incur usage.`,
-            )
-        ) {
-            return;
-        }
-        try {
-            const response = await retryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPost({
-                path: { pack_id: pack.id },
+        } finally {
+            setBusy((current) => {
+                const next = new Set(current);
+                next.delete(key);
+                return next;
             });
-            if (response.error) throw new Error(describeSampleError(response.error));
-            const queued = response.data?.retry_summary?.enqueued_jobs ?? count;
-            setMessage({ text: `${queued} failed voice${queued === 1 ? "" : "s"} queued for retry.`, isError: false });
-            await load();
-        } catch (error) {
-            fail(error);
-            await load().catch(() => undefined);
         }
     };
 
@@ -133,13 +156,19 @@ export default function GeminiTtsSamplesPage() {
         }
     };
 
+    // Only samples of the selected provider, model and (when given) voice are
+    // shown, so a previous selection's audio is never presented as this one's.
+    const selectedModel = form.model_id.trim();
+    const selectedVoice = form.voice_id.trim();
+    const visiblePacks = packs.filter((pack) => pack.provider === PROVIDER && pack.model_id === selectedModel);
+
     return (
         <main className="container mx-auto max-w-6xl space-y-6 p-6">
             <div>
                 <h1 className="text-2xl font-semibold">Gemini TTS samples</h1>
                 <p className="text-sm text-muted-foreground">
-                    Batch-generate packs or audition one canonical voice at a time. Current versions are played by
-                    default.
+                    Generate and audition voice samples. Each voice is either generating, ready to play, or failed
+                    with a retry. Generation is billable.
                 </p>
             </div>
             {message && (
@@ -153,6 +182,10 @@ export default function GeminiTtsSamplesPage() {
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={createPack} className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-1">
+                            <Label>Provider</Label>
+                            <p className="rounded border bg-muted p-2 text-sm">{PROVIDER_LABEL}</p>
+                        </div>
                         {FORM_FIELDS.map((key) => (
                             <div key={key} className="space-y-1">
                                 <Label htmlFor={key}>
@@ -168,78 +201,79 @@ export default function GeminiTtsSamplesPage() {
                             </div>
                         ))}
                         <Button type="submit" className="md:col-span-2">
-                            {form.voice_id.trim() ? "Generate selected voice" : "Generate all voices"}
+                            {selectedVoice ? "Generate selected voice" : "Generate all voices"}
                         </Button>
                     </form>
                 </CardContent>
             </Card>
-            {packs.map((pack) => {
-                const voiceIds = Array.from(new Set(pack.assets.map((asset) => asset.voice_id)));
-                const eligible = pack.eligible_voices ?? 0;
+            {visiblePacks.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                    No samples yet for {PROVIDER_LABEL} · {selectedModel || "this model"}.
+                </p>
+            )}
+            {visiblePacks.map((pack) => {
+                const voiceIds = Array.from(new Set(pack.assets.map((asset) => asset.voice_id))).filter(
+                    (voiceId) => !selectedVoice || voiceId === selectedVoice,
+                );
                 return (
                     <Card key={pack.id}>
                         <CardHeader>
                             <CardTitle>
-                                Pack #{pack.id} · {pack.model_id} · {pack.status}
+                                {PROVIDER_LABEL} · {pack.model_id}
                             </CardTitle>
                             <p className="text-sm text-muted-foreground">
-                                {pack.language} · {pack.location} · catalog {pack.catalog_revision}
+                                {pack.language} · {pack.location} · {pack.style_text}
                             </p>
                         </CardHeader>
                         <CardContent className="space-y-2">
                             {voiceIds.map((voiceId) => {
-                                const versions = pack.assets.filter((asset) => asset.voice_id === voiceId);
-                                const current = versions.find((asset) => asset.is_current && asset.status === "completed");
-                                const latest = versions[versions.length - 1];
-                                const failedOnly = !current && latest?.status === "failed";
-                                const src = current ? (freshUrls[current.id] ?? current.sample_url ?? undefined) : undefined;
+                                const state = voiceState(pack.assets.filter((asset) => asset.voice_id === voiceId));
+                                const inFlight = busy.has(`${pack.id}:${voiceId}`);
+                                const src =
+                                    state.kind === "ready"
+                                        ? (freshUrls[state.asset.id] ?? state.asset.sample_url ?? undefined)
+                                        : undefined;
                                 return (
                                     <div key={voiceId} className="flex flex-wrap items-center gap-3 rounded border p-3">
                                         <span className="w-24 font-medium">{voiceId}</span>
-                                        {current && src ? (
-                                            <audio
-                                                controls
-                                                src={src}
-                                                className="h-8"
-                                                aria-label={`${voiceId} sample`}
-                                                onError={() => {
-                                                    if (!freshUrls[current.id]) void refreshPlayback(pack, current);
-                                                }}
-                                            />
-                                        ) : (
-                                            <span className="text-sm text-muted-foreground">
-                                                {latest?.status || "not generated"}
-                                            </span>
+                                        {state.kind === "ready" && (
+                                            <>
+                                                <span className="text-sm text-green-700">Ready</span>
+                                                {src && (
+                                                    <audio
+                                                        controls
+                                                        src={src}
+                                                        className="h-8"
+                                                        aria-label={`${voiceId} sample`}
+                                                        onError={() => {
+                                                            if (!freshUrls[state.asset.id]) void refreshPlayback(pack, state.asset);
+                                                        }}
+                                                    />
+                                                )}
+                                            </>
                                         )}
-                                        {failedOnly ? (
-                                            <span className="text-sm text-destructive">
-                                                {latest?.error_message || "Generation failed"} — use “Retry failed voices”
-                                            </span>
-                                        ) : (
-                                            <Button
-                                                size="sm"
-                                                variant="outline"
-                                                disabled={isActive(latest)}
-                                                onClick={() => generate(pack, voiceId, Boolean(current))}
-                                            >
-                                                {current ? "Regenerate" : "Generate"}
-                                            </Button>
+                                        {state.kind === "generating" && (
+                                            <span className="text-sm text-muted-foreground">Generating…</span>
                                         )}
-                                        <details className="text-sm">
-                                            <summary>History ({versions.length})</summary>
-                                            {versions.map((version) => (
-                                                <div key={version.id}>
-                                                    v{version.version}: {version.status}
-                                                    {version.is_current ? " · current" : ""}
-                                                </div>
-                                            ))}
-                                        </details>
+                                        {state.kind === "none" && (
+                                            <>
+                                                <span className="text-sm text-muted-foreground">Not generated</span>
+                                                <Button size="sm" variant="outline" disabled={inFlight} onClick={() => generate(pack, voiceId, false)}>
+                                                    Generate
+                                                </Button>
+                                            </>
+                                        )}
+                                        {state.kind === "failed" && (
+                                            <>
+                                                <span className="text-sm text-destructive">Failed: {state.message}</span>
+                                                <Button size="sm" variant="outline" disabled={inFlight} onClick={() => generate(pack, voiceId, true)}>
+                                                    Retry
+                                                </Button>
+                                            </>
+                                        )}
                                     </div>
                                 );
                             })}
-                            <Button variant="secondary" disabled={eligible === 0} onClick={() => retryFailed(pack)}>
-                                Retry failed voices ({eligible})
-                            </Button>
                         </CardContent>
                     </Card>
                 );
