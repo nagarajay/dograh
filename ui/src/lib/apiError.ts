@@ -5,12 +5,20 @@
  * and FastAPI shapes that error as `{ detail: string }`, `{ detail:
  * [{ msg, loc, ... }] }`, or backend validation arrays like `{ detail:
  * [{ model, message }] }`. This normalizes those to a single string so it can
- * be rendered or thrown directly.
+ * be rendered or thrown directly. A detail object (`{ code, message, ... }`, as
+ * the model-slot and sample-library routes return) yields its `message`; an
+ * object without one falls back to `fallback` rather than rendering as
+ * "[object Object]".
  */
 export function detailFromError(err: unknown, fallback = "Request failed"): string {
     if (typeof err === "string") return err;
     const e = err as { detail?: unknown };
     if (typeof e?.detail === "string") return e.detail;
+    if (e?.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
+        const message = (e.detail as { message?: unknown }).message;
+        if (typeof message === "string" && message) return message;
+        return fallback;
+    }
     if (Array.isArray(e?.detail) && e.detail.length > 0) {
         const messages = e.detail
             .map((item) => {

@@ -316,6 +316,20 @@ export type AppendTextChatMessageRequest = {
 };
 
 /**
+ * ApplyTemplateResponse
+ */
+export type ApplyTemplateResponse = {
+    /**
+     * Workflow Id
+     */
+    workflow_id: number;
+    /**
+     * Seeded Slots
+     */
+    seeded_slots: Array<string>;
+};
+
+/**
  * AssemblyAI
  */
 export type AssemblyAisttConfiguration = {
@@ -1840,6 +1854,104 @@ export type CreatedByResponse = {
 };
 
 /**
+ * CredentialCreateRequest
+ */
+export type CredentialCreateRequest = {
+    /**
+     * Credential Ref
+     *
+     * Existing reference to add a new version to (rotation). Omit to create a new reference.
+     */
+    credential_ref?: string | null;
+    /**
+     * Kind
+     */
+    kind: 'api_key' | 'service_account_json' | 'aws_iam';
+    /**
+     * Label
+     */
+    label?: string | null;
+    /**
+     * Source Ref
+     *
+     * Non-secret pointer to the canonical copy, for example an AVSIQ Vault path and version.
+     */
+    source_ref?: string | null;
+    /**
+     * Secret
+     *
+     * Write-only. Keys depend on kind: api_key | credentials | aws_access_key, aws_secret_key, aws_session_token.
+     */
+    secret: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * CredentialListResponse
+ */
+export type CredentialListResponse = {
+    /**
+     * Credentials
+     */
+    credentials: Array<CredentialMetadata>;
+};
+
+/**
+ * CredentialMetadata
+ */
+export type CredentialMetadata = {
+    /**
+     * Credential Ref
+     */
+    credential_ref: string;
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Kind
+     */
+    kind: 'api_key' | 'service_account_json' | 'aws_iam';
+    /**
+     * Label
+     */
+    label?: string | null;
+    /**
+     * Source Ref
+     */
+    source_ref?: string | null;
+    /**
+     * Key Id
+     */
+    key_id: string;
+    /**
+     * Created At
+     */
+    created_at?: string | null;
+    /**
+     * Revoked At
+     */
+    revoked_at?: string | null;
+};
+
+/**
+ * CredentialRef
+ */
+export type CredentialRef = {
+    /**
+     * Credential Ref
+     */
+    credential_ref: string;
+    /**
+     * Version
+     *
+     * Exact credential version to pin. Omit to pin the latest active one.
+     */
+    version?: number | null;
+};
+
+/**
  * CredentialResponse
  *
  * Response schema for a webhook credential (never includes sensitive data).
@@ -2844,6 +2956,397 @@ export type FolderResponse = {
 };
 
 /**
+ * GeminiTTSCatalogResponse
+ */
+export type GeminiTtsCatalogResponse = {
+    /**
+     * Provider
+     */
+    provider: 'google_vertex';
+    /**
+     * Source Url
+     */
+    source_url: string;
+    /**
+     * Sample Policy
+     */
+    sample_policy: string;
+    /**
+     * Models
+     */
+    models: Array<GeminiTtsModelCatalogEntry>;
+};
+
+/**
+ * GeminiTTSModelCatalogEntry
+ */
+export type GeminiTtsModelCatalogEntry = {
+    /**
+     * Model
+     */
+    model: string;
+    /**
+     * Catalog Revision
+     */
+    catalog_revision: string;
+    /**
+     * Lifecycle
+     */
+    lifecycle: 'ga' | 'preview';
+    /**
+     * Locations
+     */
+    locations: Array<string>;
+    /**
+     * Output Format
+     */
+    output_format?: string | null;
+    /**
+     * Sample Rate Hz
+     */
+    sample_rate_hz?: number | null;
+    /**
+     * Channels
+     */
+    channels?: number | null;
+    /**
+     * Voices
+     */
+    voices: Array<GeminiTtsVoiceCatalogEntry>;
+};
+
+/**
+ * GeminiTTSSampleAssetResponse
+ */
+export type GeminiTtsSampleAssetResponse = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Voice Id
+     */
+    voice_id: string;
+    /**
+     * Gender
+     */
+    gender: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Is Current
+     */
+    is_current?: boolean;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Storage Key
+     */
+    storage_key?: string | null;
+    /**
+     * Playable Format
+     */
+    playable_format?: string | null;
+    /**
+     * Mime Type
+     */
+    mime_type?: string | null;
+    /**
+     * Duration Seconds
+     */
+    duration_seconds?: number | null;
+    /**
+     * Sha256
+     */
+    sha256?: string | null;
+    /**
+     * Attempts
+     */
+    attempts: number;
+    /**
+     * Error Message
+     */
+    error_message?: string | null;
+    /**
+     * Generated At
+     */
+    generated_at?: string | null;
+    /**
+     * Sample Url
+     */
+    sample_url?: string | null;
+};
+
+/**
+ * GeminiTTSSampleCatalogAsset
+ */
+export type GeminiTtsSampleCatalogAsset = {
+    /**
+     * Pack Id
+     */
+    pack_id: number;
+    /**
+     * Asset Id
+     */
+    asset_id: number;
+    /**
+     * Catalog Revision
+     */
+    catalog_revision: string;
+    /**
+     * Location
+     */
+    location: string;
+    /**
+     * Language
+     */
+    language: string;
+    /**
+     * Context
+     */
+    context: string;
+    /**
+     * Sample Text
+     */
+    sample_text: string;
+    /**
+     * Duration Seconds
+     */
+    duration_seconds?: number | null;
+    /**
+     * Sha256
+     */
+    sha256?: string | null;
+    /**
+     * Sample Url
+     */
+    sample_url?: string | null;
+};
+
+/**
+ * GeminiTTSSamplePackCreateRequest
+ */
+export type GeminiTtsSamplePackCreateRequest = {
+    /**
+     * Model Id
+     */
+    model_id: string;
+    /**
+     * Voice Id
+     *
+     * Optional canonical Google voice ID. When supplied, only this voice is queued; omit it to generate the full catalog batch.
+     */
+    voice_id?: string | null;
+    /**
+     * Catalog Revision
+     */
+    catalog_revision?: string | null;
+    /**
+     * Location
+     */
+    location?: string;
+    /**
+     * Language
+     */
+    language?: string;
+    /**
+     * Style Text
+     */
+    style_text: string;
+    /**
+     * Sample Text
+     */
+    sample_text: string;
+};
+
+/**
+ * GeminiTTSSamplePackResponse
+ */
+export type GeminiTtsSamplePackResponse = {
+    /**
+     * Id
+     */
+    id: number;
+    /**
+     * Provider
+     */
+    provider: string;
+    /**
+     * Model Id
+     */
+    model_id: string;
+    /**
+     * Catalog Revision
+     */
+    catalog_revision: string;
+    /**
+     * Location
+     */
+    location: string;
+    /**
+     * Language
+     */
+    language: string;
+    /**
+     * Style Text
+     */
+    style_text: string;
+    /**
+     * Sample Text
+     */
+    sample_text: string;
+    /**
+     * Request Fingerprint
+     */
+    request_fingerprint: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Created By
+     */
+    created_by?: string | null;
+    /**
+     * Created At
+     */
+    created_at?: string | null;
+    /**
+     * Completed At
+     */
+    completed_at?: string | null;
+    /**
+     * Total Assets
+     */
+    total_assets: number;
+    /**
+     * Completed Assets
+     */
+    completed_assets: number;
+    /**
+     * Failed Assets
+     */
+    failed_assets: number;
+    /**
+     * Total Voices
+     */
+    total_voices?: number;
+    /**
+     * Playable Voices
+     */
+    playable_voices?: number;
+    /**
+     * Eligible Voices
+     */
+    eligible_voices?: number;
+    /**
+     * Active Voices
+     */
+    active_voices?: number;
+    retry_summary?: GeminiTtsSampleRetrySummary | null;
+    /**
+     * Assets
+     */
+    assets: Array<GeminiTtsSampleAssetResponse>;
+};
+
+/**
+ * GeminiTTSSampleRetrySummary
+ */
+export type GeminiTtsSampleRetrySummary = {
+    /**
+     * Operation Id
+     */
+    operation_id: string;
+    /**
+     * Eligible Voices
+     */
+    eligible_voices: number;
+    /**
+     * Skipped Playable Voices
+     */
+    skipped_playable_voices: number;
+    /**
+     * Skipped Active Voices
+     */
+    skipped_active_voices: number;
+    /**
+     * Selected Voices
+     */
+    selected_voices: number;
+    /**
+     * Enqueued Jobs
+     */
+    enqueued_jobs: number;
+    /**
+     * Enqueue Conflicts
+     */
+    enqueue_conflicts: number;
+    /**
+     * Enqueue Failures
+     */
+    enqueue_failures: number;
+    /**
+     * Asset Ids
+     */
+    asset_ids: Array<number>;
+    /**
+     * Job Ids
+     */
+    job_ids: Array<string>;
+};
+
+/**
+ * GeminiTTSSampleVoiceGenerationRequest
+ */
+export type GeminiTtsSampleVoiceGenerationRequest = {
+    /**
+     * Regenerate
+     *
+     * Set true only after explicitly confirming that a new Google TTS request will be sent for this one voice and may incur usage.
+     */
+    regenerate?: boolean;
+};
+
+/**
+ * GeminiTTSVoiceCatalogEntry
+ */
+export type GeminiTtsVoiceCatalogEntry = {
+    /**
+     * Voice Id
+     */
+    voice_id: string;
+    /**
+     * Gender
+     */
+    gender: 'Female' | 'Male';
+    /**
+     * Preview
+     */
+    preview: boolean;
+    /**
+     * Demo Url
+     */
+    demo_url: string;
+    /**
+     * Sample Url
+     */
+    sample_url?: string | null;
+    /**
+     * Sample Reuse
+     */
+    sample_reuse: 'official_demo_page_only';
+    /**
+     * Samples
+     */
+    samples?: Array<GeminiTtsSampleCatalogAsset>;
+};
+
+/**
  * Gladia
  */
 export type GladiaSttConfiguration = {
@@ -3156,7 +3659,7 @@ export type GoogleVertexSttConfiguration = {
     /**
      * Api Key
      *
-     * Vertex API key. Google does not document API-key authentication for Gemini transcription yet; setting it is rejected. Leave blank.
+     * Vertex API key. Google does not document API keys for the Live API; a probe showed it works with project_id set (complete model resource). Without project_id it is rejected.
      */
     api_key?: string | Array<string> | null;
     /**
@@ -3174,7 +3677,7 @@ export type GoogleVertexSttConfiguration = {
     /**
      * Project Id
      *
-     * Google Cloud project ID. Required for service-account / ADC.
+     * Google Cloud project ID. Required for service-account / ADC, and with an API key.
      */
     project_id?: string | null;
     /**
@@ -3202,7 +3705,7 @@ export type GoogleVertexTtsConfiguration = {
     /**
      * Api Key
      *
-     * Not supported: Google documents service-account / OAuth credentials only for Gemini-TTS. Leave blank.
+     * Vertex API key. Uses the Vertex streamGenerateContent API (global endpoint), the one Gemini-TTS method Google lists as key-capable. The Cloud Text-to-Speech API (service account / ADC) does not take keys. Not combined with credentials.
      */
     api_key?: string | Array<string> | null;
     /**
@@ -3229,6 +3732,12 @@ export type GoogleVertexTtsConfiguration = {
      * Optional natural-language style instruction (tone, pace, accent).
      */
     prompt?: string | null;
+    /**
+     * Project Id
+     *
+     * Google Cloud project ID. Used with an API key to send the complete projects/{project}/locations/{location}/... model resource; required for the Vertex API-key Gemini-TTS path.
+     */
+    project_id?: string | null;
     /**
      * Location
      *
@@ -6101,6 +6610,208 @@ export type SignupRequest = {
      * Organization External Reference
      */
     organization_external_reference?: string | null;
+};
+
+/**
+ * SlotDraftRequest
+ */
+export type SlotDraftRequest = {
+    /**
+     * Expected Revision
+     *
+     * Revision from the last readback of this slot. A stale value is rejected with 409.
+     */
+    expected_revision: number;
+    /**
+     * Config
+     *
+     * Provider settings without secrets: provider, model, and provider-specific fields.
+     */
+    config: {
+        [key: string]: unknown;
+    };
+    /**
+     * Omit only for providers that need no secret (for example Vertex with ADC).
+     */
+    credential?: CredentialRef | null;
+    /**
+     * Change Note
+     */
+    change_note?: string | null;
+};
+
+/**
+ * SlotHistoryResponse
+ */
+export type SlotHistoryResponse = {
+    /**
+     * Workflow Id
+     */
+    workflow_id: number;
+    /**
+     * Slot
+     */
+    slot: 'llm' | 'stt' | 'tts' | 'embeddings';
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Versions
+     */
+    versions: Array<SlotVersion>;
+};
+
+/**
+ * SlotPublishRequest
+ */
+export type SlotPublishRequest = {
+    /**
+     * Version
+     *
+     * Draft version to publish.
+     */
+    version: number;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+};
+
+/**
+ * SlotRollbackRequest
+ */
+export type SlotRollbackRequest = {
+    /**
+     * To Version
+     */
+    to_version: number;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Change Note
+     */
+    change_note?: string | null;
+};
+
+/**
+ * SlotStatus
+ */
+export type SlotStatus = {
+    /**
+     * Slot
+     */
+    slot: 'llm' | 'stt' | 'tts' | 'embeddings';
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Source
+     *
+     * Where this workflow's live setting comes from. `organization_default_inherited` means later organization-default changes still change this workflow until it is migrated.
+     */
+    source: 'workflow_slot' | 'legacy_workflow_override' | 'organization_default_inherited' | 'unconfigured';
+    /**
+     * Published Version
+     */
+    published_version?: number | null;
+    /**
+     * Draft Version
+     */
+    draft_version?: number | null;
+    published?: SlotVersion | null;
+    draft?: SlotVersion | null;
+    /**
+     * Effective
+     *
+     * What a run resolves for this slot, without secrets. When the slot cannot be resolved (revoked credential, missing encryption key, pending template copy) it carries `error` (sanitized, actionable), `error_code`, and the `provider`/`model` that failed; `source` still says where the slot comes from. `null` only when nothing is configured.
+     */
+    effective?: {
+        [key: string]: unknown;
+    } | null;
+};
+
+/**
+ * SlotValidationResponse
+ */
+export type SlotValidationResponse = {
+    /**
+     * Slot
+     */
+    slot: 'llm' | 'stt' | 'tts' | 'embeddings';
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Status
+     */
+    status: 'valid' | 'invalid';
+    /**
+     * Errors
+     */
+    errors?: Array<string>;
+};
+
+/**
+ * SlotVersion
+ */
+export type SlotVersion = {
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * State
+     */
+    state: 'draft' | 'published' | 'superseded' | 'discarded';
+    /**
+     * Config
+     */
+    config: {
+        [key: string]: unknown;
+    };
+    /**
+     * Credential
+     */
+    credential?: {
+        [key: string]: unknown;
+    } | null;
+    /**
+     * Validation Status
+     */
+    validation_status: 'unvalidated' | 'valid' | 'invalid';
+    /**
+     * Validated At
+     */
+    validated_at?: string | null;
+    /**
+     * Based On Version
+     */
+    based_on_version?: number | null;
+    /**
+     * Origin
+     */
+    origin: string;
+    /**
+     * Change Note
+     */
+    change_note?: string | null;
+    /**
+     * Created By
+     */
+    created_by?: string | null;
+    /**
+     * Created At
+     */
+    created_at?: string | null;
+    /**
+     * Published At
+     */
+    published_at?: string | null;
 };
 
 /**
@@ -9144,6 +9855,40 @@ export type WorkflowRunsResponse = {
 };
 
 /**
+ * WorkflowSlotsGroupResponse
+ */
+export type WorkflowSlotsGroupResponse = {
+    /**
+     * Workflows
+     */
+    workflows: Array<WorkflowSlotsResponse>;
+};
+
+/**
+ * WorkflowSlotsResponse
+ */
+export type WorkflowSlotsResponse = {
+    /**
+     * Workflow Id
+     */
+    workflow_id: number;
+    /**
+     * Workflow Uuid
+     */
+    workflow_uuid: string;
+    /**
+     * Template Status
+     *
+     * `pending`: the organization-default copy has not completed and the workflow refuses to run. Retry with POST .../model-slots/apply-template.
+     */
+    template_status?: 'pending' | null;
+    /**
+     * Slots
+     */
+    slots: Array<SlotStatus>;
+};
+
+/**
  * WorkflowSummaryResponse
  */
 export type WorkflowSummaryResponse = {
@@ -9946,6 +10691,10 @@ export type ProvisionOrganizationApiV1SuperuserOrganizationsPostData = {
     body: PlatformOrganizationRequest;
     headers?: {
         /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
          * X-Platform-Admin-Key
          */
         'X-Platform-Admin-Key'?: string | null;
@@ -10293,6 +11042,10 @@ export type BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostData = {
     body: PlatformBootstrapSuperadminRequest;
     headers?: {
         /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
          * X-Platform-Admin-Key
          */
         'X-Platform-Admin-Key'?: string | null;
@@ -10331,6 +11084,10 @@ export type BootstrapSuperadminApiV1SuperuserBootstrapSuperadminPostResponse = B
 export type MintPlatformApiKeyApiV1SuperuserOrganizationsOrganizationIdApiKeysPostData = {
     body?: never;
     headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
         /**
          * X-Platform-Admin-Key
          */
@@ -11370,6 +12127,945 @@ export type GetAmbientNoiseUploadUrlApiV1WorkflowAmbientNoiseUploadUrlPostRespon
 };
 
 export type GetAmbientNoiseUploadUrlApiV1WorkflowAmbientNoiseUploadUrlPostResponse = GetAmbientNoiseUploadUrlApiV1WorkflowAmbientNoiseUploadUrlPostResponses[keyof GetAmbientNoiseUploadUrlApiV1WorkflowAmbientNoiseUploadUrlPostResponses];
+
+export type GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Model
+         */
+        model?: string | null;
+        /**
+         * Catalog Revision
+         */
+        catalog_revision?: string | null;
+        /**
+         * Location
+         */
+        location?: string | null;
+        /**
+         * Language
+         */
+        language?: string | null;
+        /**
+         * Context
+         */
+        context?: string | null;
+        /**
+         * Sample Text
+         */
+        sample_text?: string | null;
+    };
+    url: '/api/v1/model-slots/google-vertex/tts/catalog';
+};
+
+export type GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetError = GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetErrors[keyof GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetErrors];
+
+export type GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: GeminiTtsCatalogResponse;
+};
+
+export type GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetResponse = GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetResponses[keyof GetGoogleVertexTtsCatalogApiV1ModelSlotsGoogleVertexTtsCatalogGetResponses];
+
+export type GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Model
+         */
+        model?: string | null;
+        /**
+         * Catalog Revision
+         */
+        catalog_revision?: string | null;
+        /**
+         * Location
+         */
+        location?: string | null;
+        /**
+         * Language
+         */
+        language?: string | null;
+        /**
+         * Context
+         */
+        context?: string | null;
+        /**
+         * Sample Text
+         */
+        sample_text?: string | null;
+    };
+    url: '/api/v1/superuser/gemini-tts/catalog';
+};
+
+export type GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetError = GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetErrors[keyof GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetErrors];
+
+export type GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: GeminiTtsCatalogResponse;
+};
+
+export type GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetResponse = GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetResponses[keyof GetPlatformGeminiTtsCatalogApiV1SuperuserGeminiTtsCatalogGetResponses];
+
+export type GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+    };
+    query?: never;
+    url: '/api/v1/workflow/{workflow_id}/model-slots';
+};
+
+export type GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetError = GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetErrors[keyof GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetErrors];
+
+export type GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: WorkflowSlotsResponse;
+};
+
+export type GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetResponse = GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetResponses[keyof GetWorkflowModelSlotsApiV1WorkflowWorkflowIdModelSlotsGetResponses];
+
+export type ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+    };
+    query?: never;
+    url: '/api/v1/workflow/{workflow_id}/model-slots/apply-template';
+};
+
+export type ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostError = ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostErrors[keyof ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostErrors];
+
+export type ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostResponses = {
+    /**
+     * Successful Response
+     */
+    200: ApplyTemplateResponse;
+};
+
+export type ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostResponse = ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostResponses[keyof ApplySlotTemplateApiV1WorkflowWorkflowIdModelSlotsApplyTemplatePostResponses];
+
+export type GetModelSlotsForWorkflowsApiV1ModelSlotsGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query: {
+        /**
+         * Workflow Ids
+         *
+         * Comma-separated workflow ids, for example the workflows of one AVSIQ agent.
+         */
+        workflow_ids: string;
+    };
+    url: '/api/v1/model-slots';
+};
+
+export type GetModelSlotsForWorkflowsApiV1ModelSlotsGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetModelSlotsForWorkflowsApiV1ModelSlotsGetError = GetModelSlotsForWorkflowsApiV1ModelSlotsGetErrors[keyof GetModelSlotsForWorkflowsApiV1ModelSlotsGetErrors];
+
+export type GetModelSlotsForWorkflowsApiV1ModelSlotsGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: WorkflowSlotsGroupResponse;
+};
+
+export type GetModelSlotsForWorkflowsApiV1ModelSlotsGetResponse = GetModelSlotsForWorkflowsApiV1ModelSlotsGetResponses[keyof GetModelSlotsForWorkflowsApiV1ModelSlotsGetResponses];
+
+export type SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutData = {
+    body: SlotDraftRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+        /**
+         * Slot
+         */
+        slot: 'llm' | 'stt' | 'tts' | 'embeddings';
+    };
+    query?: never;
+    url: '/api/v1/workflow/{workflow_id}/model-slots/{slot}/draft';
+};
+
+export type SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutError = SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutErrors[keyof SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutErrors];
+
+export type SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutResponses = {
+    /**
+     * Successful Response
+     */
+    200: SlotVersion;
+};
+
+export type SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutResponse = SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutResponses[keyof SaveSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftPutResponses];
+
+export type ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+        /**
+         * Slot
+         */
+        slot: 'llm' | 'stt' | 'tts' | 'embeddings';
+        /**
+         * Version
+         */
+        version: number;
+    };
+    query?: never;
+    url: '/api/v1/workflow/{workflow_id}/model-slots/{slot}/draft/{version}/validate';
+};
+
+export type ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostError = ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostErrors[keyof ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostErrors];
+
+export type ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostResponses = {
+    /**
+     * Successful Response
+     */
+    200: SlotValidationResponse;
+};
+
+export type ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostResponse = ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostResponses[keyof ValidateSlotDraftApiV1WorkflowWorkflowIdModelSlotsSlotDraftVersionValidatePostResponses];
+
+export type PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostData = {
+    body: SlotPublishRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+        /**
+         * Slot
+         */
+        slot: 'llm' | 'stt' | 'tts' | 'embeddings';
+    };
+    query?: never;
+    url: '/api/v1/workflow/{workflow_id}/model-slots/{slot}/publish';
+};
+
+export type PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostError = PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostErrors[keyof PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostErrors];
+
+export type PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: SlotVersion;
+};
+
+export type PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostResponse = PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostResponses[keyof PublishSlotApiV1WorkflowWorkflowIdModelSlotsSlotPublishPostResponses];
+
+export type RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostData = {
+    body: SlotRollbackRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+        /**
+         * Slot
+         */
+        slot: 'llm' | 'stt' | 'tts' | 'embeddings';
+    };
+    query?: never;
+    url: '/api/v1/workflow/{workflow_id}/model-slots/{slot}/rollback';
+};
+
+export type RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostError = RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostErrors[keyof RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostErrors];
+
+export type RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: SlotVersion;
+};
+
+export type RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostResponse = RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostResponses[keyof RollbackSlotApiV1WorkflowWorkflowIdModelSlotsSlotRollbackPostResponses];
+
+export type GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Workflow Id
+         */
+        workflow_id: number;
+        /**
+         * Slot
+         */
+        slot: 'llm' | 'stt' | 'tts' | 'embeddings';
+    };
+    query?: {
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/workflow/{workflow_id}/model-slots/{slot}/history';
+};
+
+export type GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetError = GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetErrors[keyof GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetErrors];
+
+export type GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: SlotHistoryResponse;
+};
+
+export type GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetResponse = GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetResponses[keyof GetSlotHistoryApiV1WorkflowWorkflowIdModelSlotsSlotHistoryGetResponses];
+
+export type ListModelCredentialsApiV1ModelCredentialsGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/model-credentials';
+};
+
+export type ListModelCredentialsApiV1ModelCredentialsGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListModelCredentialsApiV1ModelCredentialsGetError = ListModelCredentialsApiV1ModelCredentialsGetErrors[keyof ListModelCredentialsApiV1ModelCredentialsGetErrors];
+
+export type ListModelCredentialsApiV1ModelCredentialsGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: CredentialListResponse;
+};
+
+export type ListModelCredentialsApiV1ModelCredentialsGetResponse = ListModelCredentialsApiV1ModelCredentialsGetResponses[keyof ListModelCredentialsApiV1ModelCredentialsGetResponses];
+
+export type CreateModelCredentialApiV1ModelCredentialsPostData = {
+    body: CredentialCreateRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/model-credentials';
+};
+
+export type CreateModelCredentialApiV1ModelCredentialsPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CreateModelCredentialApiV1ModelCredentialsPostError = CreateModelCredentialApiV1ModelCredentialsPostErrors[keyof CreateModelCredentialApiV1ModelCredentialsPostErrors];
+
+export type CreateModelCredentialApiV1ModelCredentialsPostResponses = {
+    /**
+     * Successful Response
+     */
+    201: CredentialMetadata;
+};
+
+export type CreateModelCredentialApiV1ModelCredentialsPostResponse = CreateModelCredentialApiV1ModelCredentialsPostResponses[keyof CreateModelCredentialApiV1ModelCredentialsPostResponses];
+
+export type RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Credential Ref
+         */
+        credential_ref: string;
+        /**
+         * Version
+         */
+        version: number;
+    };
+    query?: never;
+    url: '/api/v1/model-credentials/{credential_ref}/versions/{version}';
+};
+
+export type RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteError = RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteErrors[keyof RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteErrors];
+
+export type RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteResponses = {
+    /**
+     * Successful Response
+     */
+    200: CredentialMetadata;
+};
+
+export type RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteResponse = RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteResponses[keyof RevokeModelCredentialVersionApiV1ModelCredentialsCredentialRefVersionsVersionDeleteResponses];
+
+export type ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Completed Only
+         */
+        completed_only?: boolean;
+    };
+    url: '/api/v1/superuser/gemini-tts/sample-packs';
+};
+
+export type ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetError = ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetErrors[keyof ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetErrors];
+
+export type ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetResponses = {
+    /**
+     * Response List Gemini Tts Sample Packs Api V1 Superuser Gemini Tts Sample Packs Get
+     *
+     * Successful Response
+     */
+    200: Array<GeminiTtsSamplePackResponse>;
+};
+
+export type ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetResponse = ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetResponses[keyof ListGeminiTtsSamplePacksApiV1SuperuserGeminiTtsSamplePacksGetResponses];
+
+export type CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostData = {
+    body: GeminiTtsSamplePackCreateRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/superuser/gemini-tts/sample-packs';
+};
+
+export type CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostError = CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostErrors[keyof CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostErrors];
+
+export type CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostResponses = {
+    /**
+     * Successful Response
+     */
+    202: GeminiTtsSamplePackResponse;
+};
+
+export type CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostResponse = CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostResponses[keyof CreateGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPostResponses];
+
+export type GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Pack Id
+         */
+        pack_id: number;
+    };
+    query?: never;
+    url: '/api/v1/superuser/gemini-tts/sample-packs/{pack_id}';
+};
+
+export type GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetError = GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetErrors[keyof GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetErrors];
+
+export type GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: GeminiTtsSamplePackResponse;
+};
+
+export type GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetResponse = GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetResponses[keyof GetGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdGetResponses];
+
+export type RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Pack Id
+         */
+        pack_id: number;
+    };
+    query?: {
+        /**
+         * Limit
+         *
+         * Platform-admin diagnostic cap; omit for one recovery pass over all eligible voices.
+         */
+        limit?: number | null;
+    };
+    url: '/api/v1/superuser/gemini-tts/sample-packs/{pack_id}/retry';
+};
+
+export type RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostError = RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostErrors[keyof RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostErrors];
+
+export type RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostResponses = {
+    /**
+     * Successful Response
+     */
+    202: GeminiTtsSamplePackResponse;
+};
+
+export type RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostResponse = RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostResponses[keyof RetryGeminiTtsSamplePackApiV1SuperuserGeminiTtsSamplePacksPackIdRetryPostResponses];
+
+export type GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostData = {
+    body: GeminiTtsSampleVoiceGenerationRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Pack Id
+         */
+        pack_id: number;
+        /**
+         * Voice Id
+         */
+        voice_id: string;
+    };
+    query?: never;
+    url: '/api/v1/superuser/gemini-tts/sample-packs/{pack_id}/voices/{voice_id}/generate';
+};
+
+export type GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostError = GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostErrors[keyof GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostErrors];
+
+export type GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostResponses = {
+    /**
+     * Successful Response
+     */
+    202: GeminiTtsSamplePackResponse;
+};
+
+export type GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostResponse = GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostResponses[keyof GenerateGeminiTtsSampleVoiceApiV1SuperuserGeminiTtsSamplePacksPackIdVoicesVoiceIdGeneratePostResponses];
+
+export type GetGeminiTtsSamplePlaybackUrlApiV1SuperuserGeminiTtsSamplePacksPackIdAssetsAssetIdPlaybackUrlGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Platform-Admin-Key
+         */
+        'X-Platform-Admin-Key'?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Pack Id
+         */
+        pack_id: number;
+        /**
+         * Asset Id
+         */
+        asset_id: number;
+    };
+    query?: never;
+    url: '/api/v1/superuser/gemini-tts/sample-packs/{pack_id}/assets/{asset_id}/playback-url';
+};
+
+export type GetGeminiTtsSamplePlaybackUrlApiV1SuperuserGeminiTtsSamplePacksPackIdAssetsAssetIdPlaybackUrlGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetGeminiTtsSamplePlaybackUrlApiV1SuperuserGeminiTtsSamplePacksPackIdAssetsAssetIdPlaybackUrlGetError = GetGeminiTtsSamplePlaybackUrlApiV1SuperuserGeminiTtsSamplePacksPackIdAssetsAssetIdPlaybackUrlGetErrors[keyof GetGeminiTtsSamplePlaybackUrlApiV1SuperuserGeminiTtsSamplePacksPackIdAssetsAssetIdPlaybackUrlGetErrors];
+
+export type GetGeminiTtsSamplePlaybackUrlApiV1SuperuserGeminiTtsSamplePacksPackIdAssetsAssetIdPlaybackUrlGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
 
 export type CreateTextChatSessionApiV1WorkflowWorkflowIdTextChatSessionsPostData = {
     body: CreateTextChatSessionRequest;
