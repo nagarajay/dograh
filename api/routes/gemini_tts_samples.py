@@ -53,8 +53,7 @@ async def _asset_response(asset, *, include_url: bool = True):
 
 async def _pack_response(pack, *, include_urls: bool = True, retry_summary=None):
     assets = [
-        await _asset_response(asset, include_url=include_urls)
-        for asset in pack.assets
+        await _asset_response(asset, include_url=include_urls) for asset in pack.assets
     ]
     playable = {a.voice_id for a in assets if a.status == "completed" and a.is_current}
     active = {a.voice_id for a in assets if a.status in {"queued", "running"}}
@@ -85,7 +84,9 @@ async def _pack_response(pack, *, include_urls: bool = True, retry_summary=None)
     )
 
 
-@router.post("", response_model=GeminiTTSSamplePackResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "", response_model=GeminiTTSSamplePackResponse, status_code=status.HTTP_202_ACCEPTED
+)
 async def create_gemini_tts_sample_pack(request: GeminiTTSSamplePackCreateRequest):
     try:
         pack, _created = await create_sample_pack(request)
@@ -112,16 +113,24 @@ async def get_gemini_tts_sample_pack(pack_id: int):
     return await _pack_response(pack)
 
 
-@router.post("/{pack_id}/retry", response_model=GeminiTTSSamplePackResponse, status_code=202)
+@router.post(
+    "/{pack_id}/retry", response_model=GeminiTTSSamplePackResponse, status_code=202
+)
 async def retry_gemini_tts_sample_pack(
     pack_id: int,
-    limit: int | None = Query(default=None, ge=1, le=30,
-        description="Platform-admin diagnostic cap; omit for one recovery pass over all eligible voices."),
+    limit: int | None = Query(
+        default=None,
+        ge=1,
+        le=30,
+        description="Platform-admin diagnostic cap; omit for one recovery pass over all eligible voices.",
+    ),
 ):
     try:
         pack, summary = await retry_failed_sample_pack(pack_id, limit=limit)
     except SampleEnqueueError as exc:
-        raise HTTPException(status_code=503, detail={"message": str(exc), "retry_summary": exc.summary}) from None
+        raise HTTPException(
+            status_code=503, detail={"message": str(exc), "retry_summary": exc.summary}
+        ) from None
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     if pack is None:

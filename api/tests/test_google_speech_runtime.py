@@ -284,6 +284,7 @@ async def test_vertex_gemini_tts_direct_generation_uses_native_rate_before_setup
     # The sample worker calls _run_genai_tts directly, before TTS setup stores
     # the requested rate in the runtime property.
     service._sample_rate = 0
+
     class _FakeGenAIModels:
         def __init__(self):
             self.kwargs = None
@@ -296,17 +297,17 @@ async def test_vertex_gemini_tts_direct_generation_uses_native_rate_before_setup
                         content=SimpleNamespace(
                             parts=[
                                 SimpleNamespace(
-                                    inline_data=SimpleNamespace(
-                                        data=b"\x00\x00" * 3000
-                                    )
+                                    inline_data=SimpleNamespace(data=b"\x00\x00" * 3000)
                                 )
                             ]
                         )
                     )
                 ]
             )
+
             async def stream():
                 yield chunk
+
             return stream()
 
     models = _FakeGenAIModels()

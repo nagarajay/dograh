@@ -10,6 +10,7 @@ from api.routes.auth import router as auth_router
 from api.routes.campaign import router as campaign_router
 from api.routes.credentials import router as credentials_router
 from api.routes.folder import router as folder_router
+from api.routes.gemini_tts_samples import router as gemini_tts_samples_router
 from api.routes.knowledge_base import router as knowledge_base_router
 from api.routes.node_types import router as node_types_router
 from api.routes.organization import router as organization_router
@@ -30,7 +31,6 @@ from api.routes.webrtc_signaling import router as webrtc_signaling_router
 from api.routes.workflow import router as workflow_router
 from api.routes.workflow_embed import router as workflow_embed_router
 from api.routes.workflow_model_slots import router as workflow_model_slots_router
-from api.routes.gemini_tts_samples import router as gemini_tts_samples_router
 from api.routes.workflow_recording import router as workflow_recording_router
 from api.routes.workflow_text_chat import router as workflow_text_chat_router
 from api.services.integrations import all_routers

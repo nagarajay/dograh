@@ -1,8 +1,7 @@
 """Version Gemini-TTS samples without overwriting prior audio."""
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "e2f1a9c4b7d3"
 down_revision = "d7e4f6a8b901"
@@ -17,7 +16,9 @@ def upgrade() -> None:
     )
     op.add_column(
         "gemini_tts_sample_assets",
-        sa.Column("is_current", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column(
+            "is_current", sa.Boolean(), nullable=False, server_default=sa.false()
+        ),
     )
     op.execute(
         sa.text(

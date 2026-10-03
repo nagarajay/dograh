@@ -25,9 +25,9 @@ Auth statuses:
 - ``unsupported``  Google documents a different credential type only.
 """
 
-from dataclasses import dataclass, field
 import hashlib
 import json
+from dataclasses import dataclass, field
 from typing import Literal, Mapping
 
 Slot = Literal["llm", "stt", "tts", "embeddings"]
@@ -70,7 +70,9 @@ class VertexModel:
         return self.auth.get(method, "unsupported")
 
 
-GEMINI_TTS_DOCUMENTATION_URL = "https://docs.cloud.google.com/text-to-speech/docs/gemini-tts"
+GEMINI_TTS_DOCUMENTATION_URL = (
+    "https://docs.cloud.google.com/text-to-speech/docs/gemini-tts"
+)
 
 
 @dataclass(frozen=True)
@@ -337,9 +339,11 @@ def check_vertex_config(
                 f"Credentials."
             )
 
-    if slot == "tts" and voice and voice not in {
-        item.id for item in gemini_tts_voices(model)
-    }:
+    if (
+        slot == "tts"
+        and voice
+        and voice not in {item.id for item in gemini_tts_voices(model)}
+    ):
         return (
             f"Google Vertex TTS voice '{voice}' is not in the documented voice "
             f"catalogue for {model}."

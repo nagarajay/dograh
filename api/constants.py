@@ -120,9 +120,7 @@ PLATFORM_PROVISIONING_API_KEY_NAME = "platform-provisioning"
 # the API never accepts them in a sample-pack request body.
 GEMINI_TTS_SAMPLE_API_KEY = os.getenv("GEMINI_TTS_SAMPLE_API_KEY") or None
 GEMINI_TTS_SAMPLE_PROJECT_ID = os.getenv("GEMINI_TTS_SAMPLE_PROJECT_ID") or None
-GEMINI_TTS_SAMPLE_CREDENTIAL_REF = (
-    os.getenv("GEMINI_TTS_SAMPLE_CREDENTIAL_REF") or None
-)
+GEMINI_TTS_SAMPLE_CREDENTIAL_REF = os.getenv("GEMINI_TTS_SAMPLE_CREDENTIAL_REF") or None
 GEMINI_TTS_SAMPLE_LOCATION = os.getenv("GEMINI_TTS_SAMPLE_LOCATION", "global")
 
 # Storage Configuration
@@ -130,12 +128,12 @@ ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
 # AVSIQ-managed deployments can require external S3/S3-compatible storage.
 # Self-hosted production deployments retain the supported MinIO default unless
 # this opt-in guard is enabled.
-REQUIRE_EXTERNAL_S3_STORAGE = os.getenv(
-    "REQUIRE_EXTERNAL_S3_STORAGE", "false"
-).lower() == "true"
-RECORDING_UPLOAD_TOKEN_SECRET = os.getenv(
-    "RECORDING_UPLOAD_TOKEN_SECRET"
-) or os.getenv("OSS_JWT_SECRET", "change-me-in-production")
+REQUIRE_EXTERNAL_S3_STORAGE = (
+    os.getenv("REQUIRE_EXTERNAL_S3_STORAGE", "false").lower() == "true"
+)
+RECORDING_UPLOAD_TOKEN_SECRET = os.getenv("RECORDING_UPLOAD_TOKEN_SECRET") or os.getenv(
+    "OSS_JWT_SECRET", "change-me-in-production"
+)
 
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
